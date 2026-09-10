@@ -1,0 +1,66 @@
+{
+  "name": "dsh-subagent-hub",
+  "version": "0.1.0",
+  "description": "DSH 子智能体枢纽 — 把 DSH 自己的 agent 运行时按「模型+路由」发布成可配置、可 @、可评价、可回归的子智能体：悬浮球实时看忙闲与 tok/s，点开看会话原文，配置页自助添加，主对话按注入协议调用",
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "cordis",
+    "subagent",
+    "agent",
+    "evaluation",
+    "sqlite"
+  ],
+  "license": "MIT",
+  "private": false,
+  "type": "module",
+  "main": "./lib/host.js",
+  "exports": {
+    ".": "./lib/host.js",
+    "./client": "./lib/client.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "tests",
+    "scripts",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": "^22.19.0 || >=24"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh": "^0.1.2-rc.1"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/dsh": {
+      "optional": true
+    }
+  },
+  "scripts": {
+    "build:client": "node scripts/build-client.mjs",
+    "check:client": "node scripts/build-client.mjs --check",
+    "check:publish": "node scripts/check-publish.mjs",
+    "test": "node --test \"tests/*.test.mjs\"",
+    "dev": "node scripts/dev-server.mjs",
+    "verify": "node scripts/verify-client.mjs",
+    "pack": "node scripts/pack.mjs"
+  },
+  "dsh": {
+    "harness": {
+      "tested": "0.1.2-rc.1",
+      "supported": ">=0.1.2-rc.1 <0.2.0",
+      "note": "DSH 内部接口在 0.x 阶段仍会变。区间外的版本不会被阻止加载，但会在启动日志与 /sub-agent/api/health 的 harness 字段里明确警告。"
+    },
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": []
+    }
+  }
+}

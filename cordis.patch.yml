@@ -1,0 +1,31 @@
+# dsh-subagent-hub 的 bundle patch：向 dsh profile 插入本插件的一行 loader entry。
+#
+# - id/name 必须与 package.json 的 name 一致：客户端模块系统按「宿主 loader entry
+#   里声明了 dsh.client 的包」来装配 __DSH_BOOT__ 的行，entry 是唯一入口。
+# - inject 里**只声明离了它插件就不该存在**的服务：webServer（注册 HTTP 路由，
+#   这是宿主与面板之间唯一的 seam）。其余服务（subagents / tools / systemPrompt /
+#   sessionProjections / llm / settings / credentials）一律用 ctx.get() 防御式取用：
+#   取不到就把对应能力关掉并记一条日志，而不是让整个插件起不来。
+#   理由：本插件横跨 DSH 的多个子系统，任何一个在别的组合里缺席都不该导致全盘失效。
+# - config 全部可选，缺省值见 lib/src/config.js；留空即使用默认值。
+#
+# 装完需要重启 dsh web：新的 loader entry 与客户端 bundle 都在启动时装配。
+# 之后改 lib/client.js 不需要重启（浏览器侧按 stat 轮询热换），改 lib/host.js 需要。
+- insert:
+    - id: subagent-hub
+      name: dsh-subagent-hub
+      inject:
+        - webServer
+      config:
+        # sqlite 库路径。留空 = $DSH_HOME/subagent-hub/subagent-hub.db
+        dbPath: ''
+        # 同时最多允许多少个子 agent 在跑（真实费用护栏）。超出时新调用排队而不是失败。
+        maxConcurrentRuns: 2
+        # 单次子 agent 运行的最长时长（毫秒）。到时取消并记为 timeout。
+        runTimeoutMs: 900000
+        # 每个父会话最多并行被 @ 的子 agent 数（工具边界强制）。
+        maxParallelPerSession: 3
+        # 运行记录里保留的输出正文上限（字符）。超出部分只留 session 引用，不截断成假象。
+        outputTailChars: 20000
+        # 运行记录保留天数；0 = 永久保留。
+        retentionDays: 0

@@ -1,0 +1,48 @@
+# 依赖与构建产物
+node_modules/
+
+# 打包产物（可重新生成：node scripts/pack.mjs）
+dist/
+*.tgz
+
+# 本地临时与事故取证副本
+*.log
+*.broken-*
+*.recovered.*
+
+# 编辑器与系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# 本地覆盖（不该进仓库）
+config.json
+token-helper/
+
+# ---------------------------------------------------------------------------
+# 纵深防护：下面这些**正常情况下根本不会出现在本仓库里**。
+# 运行时数据全在 $DSH_HOME（DSH 的用户数据目录，默认在用户家目录下），
+# 那是仓库树之外的另一个目录，所以 git 本来就不可能提交到它们。列在这里只有一个目的：
+# 万一有人把某个库/凭据文件复制进仓库、或在更上层目录跑 git init，
+# 让这类文件默认不被吃进去。宁可多一行，不要一次误提交。
+# ---------------------------------------------------------------------------
+
+# sqlite（本插件的 subagent-hub.db、隔壁 memory-helper 的 memory.db 等）
+*.db
+*.db3
+*.sqlite
+*.sqlite3
+*.db-wal
+*.db-shm
+*.db-journal
+
+# 凭据与本地设置：.credentials.yaml 里是 API 密钥，settings.yaml 里是 baseURL
+.credentials.y*ml
+settings.y*ml
+*.credentials.*
+
+# 会话轨迹（含完整对话正文与工具调用记录）
+*.jsonl
+*.jsonl.zstd
+
