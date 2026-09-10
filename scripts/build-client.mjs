@@ -33,7 +33,19 @@ if (parts.length === 0) {
   process.exit(1);
 }
 
-const chunks = parts.map((name) => readFileSync(join(partsDir, name), 'utf8'));
+const chunks = parts.map((name) => readFileSync(join(root, 'lib', 'parts', name), 'utf8'));
+
+// BOM 自检：分片会被**直接拼进**同一个函数体，所以除第一个分片之外的任何 BOM
+// 都会落在 JS 源码中间——那是一个非法字符，产物编译不过，而报错位置会指向
+// 拼接后的行号，极难回溯到「某个分片被 PowerShell 写坏了」。
+// 这不是假想：PS 5.1 的 `Set-Content -Encoding UTF8` 默认写 BOM，真踩过。
+const withBom = parts.filter((_name, index) => chunks[index].charCodeAt(0) === 0xFEFF);
+if (withBom.length > 0) {
+  console.error(`✖ 这些分片带 UTF-8 BOM：${withBom.join(', ')}`);
+  console.error('  BOM 会被拼进 bundle 中间，导致整份产物解析失败；请去掉 BOM 再构建。');
+  process.exit(1);
+}
+
 const bundle = chunks.join('');
 
 // 编码自检：产物必须是干净的 UTF-8，否则中文又会变成乱码而没人发现。

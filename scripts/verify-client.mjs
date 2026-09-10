@@ -721,8 +721,18 @@ if (react === undefined) {
       const wrapped = tg.wrapLabel('把 release 0.2.0 的任务链路图发出去', 8, 2);
       check(wrapped.length === 2, '长标题折成两行', JSON.stringify(wrapped));
       check(wrapped.every((line) => tg.visualWidth(line) <= 8), '每行都不超过给定的视觉宽度', JSON.stringify(wrapped));
+      // 平衡折行：贪心填满会让最后一行只剩一个字，流程图里那种断法很扎眼。
+      const balanced = tg.wrapLabel('更新 README 与变更记录', 11, 2);
+      check(balanced.length === 2, '中文标题折成两行', JSON.stringify(balanced));
+      check(
+        tg.visualWidth(balanced[1]) >= 3,
+        '最后一行不是「只剩一个字」的孤儿行（贪心换行的典型症状）',
+        JSON.stringify(balanced),
+      );
       const clipped = tg.truncateVisual('一二三四五六七八九十', 5);
       check(clipped.endsWith('…') && tg.visualWidth(clipped) <= 5, '超宽文本被截断并以 … 结尾', clipped);
+      const tooLong = tg.wrapLabel('一二三四五六七八九十一二三四五六七八九十', 6, 2);
+      check(tooLong.length === 2 && tooLong[1].endsWith('…'), '放不下的长标题在最后一行以 … 收尾', JSON.stringify(tooLong));
       check(tg.visualWidth('abc') < tg.visualWidth('一个汉字'), '拉丁字符按更窄处理（中英混排不会忽长忽短）');
       const progress = tg.progressView(chainView.progress);
       check(Math.round(progress.segments.reduce((sum, segment) => sum + segment.flex, 0)) === 100,
@@ -738,7 +748,28 @@ if (react === undefined) {
       check(graphHtml.includes('工程师') && graphHtml.includes('42.5'), '节点上能看出谁在做、跑多快');
       check(graphHtml.includes('等 t2'), '等待中的节点写清在等谁');
       check(graphHtml.includes('t9 失败/取消'), '被阻塞的节点写清是哪个上游失败了');
+      check(graphHtml.includes('<title>'), '节点带原生 tooltip（文字必然要截断，得留一条看全文的路）');
       check(!graphHtml.includes('undefined') && !graphHtml.includes('NaN'), '渲染结果里不能出现 undefined / NaN');
+
+      // 纵向（悬浮球面板用）：348px 里横向放不下一层以上，所以面板换走向——
+      // 每个任务占满整行、层与层向下推进，不需要横向滚动。
+      const vertical = tg.graphLayout(chainView, undefined, 'v');
+      check(vertical.orientation === 'v', '纵向布局被标记出来（两种走向共用同一套分层）');
+      const rowOf = new Map(vertical.nodes.map((node) => [node.id, node.y]));
+      check(rowOf.get('t1') < rowOf.get('t2') && rowOf.get('t2') < rowOf.get('t3'), '纵向时依赖往下走');
+      const vInside = vertical.nodes.every((node) => node.x >= 0 && node.y >= 0
+        && node.x + node.w <= vertical.width && node.y + node.h <= vertical.height);
+      check(vInside, '纵向布局同样不越界', `${vertical.width}×${vertical.height}`);
+      check(
+        vertical.nodes.every((node) => node.w <= vertical.width - 2 * 8 || vertical.width <= 320),
+        '纵向节点不溢出面板宽度（层内节点均分宽度，所以不需要横向滚动）',
+        `宽 ${vertical.width}`,
+      );
+      const verticalHtml = ReactDOMServer.renderToStaticMarkup(h(exports.TaskGraph, {
+        view: chainView, orientation: 'v', metrics: tg.GRAPH_METRICS_VERTICAL,
+      }));
+      check(verticalHtml.includes('sbh-graph__svg--v'), '纵向渲染带走向类名（不是靠外部猜的）');
+      check(verticalHtml.includes('sbh-node--running'), '纵向同样按状态上色');
 
       const panelTasksHtml = ReactDOMServer.renderToStaticMarkup(h(exports.PanelTasks, {
         frame: {
