@@ -734,6 +734,82 @@ if (react === undefined) {
       const tooLong = tg.wrapLabel('一二三四五六七八九十一二三四五六七八九十', 6, 2);
       check(tooLong.length === 2 && tooLong[1].endsWith('…'), '放不下的长标题在最后一行以 … 收尾', JSON.stringify(tooLong));
       check(tg.visualWidth('abc') < tg.visualWidth('一个汉字'), '拉丁字符按更窄处理（中英混排不会忽长忽短）');
+
+      // ---- 自适应尺寸：图跟着**实际可用宽度**走（面板可以拖拽缩放）----
+      const narrowMetrics = tg.graphMetricsFor({ width: 380, columns: 2, orientation: 'h' });
+      const wideMetrics = tg.graphMetricsFor({ width: 900, columns: 2, orientation: 'h' });
+      check(wideMetrics.nodeW > narrowMetrics.nodeW, '可用宽度变大时节点跟着变宽（缩放才真的改变图）',
+        `${narrowMetrics.nodeW} → ${wideMetrics.nodeW}`);
+      const fitMetrics = tg.graphMetricsFor({ width: 900, columns: 4, orientation: 'h' });
+      const fitTotal = fitMetrics.padX * 2 + 4 * fitMetrics.nodeW + 3 * fitMetrics.gapX;
+      check(fitTotal <= 902, '列数放得下时图宽度贴合容器（不留一大块空白）', `图宽 ${fitTotal} / 容器 900`);
+      const tinyMetrics = tg.graphMetricsFor({ width: 200, columns: 6, orientation: 'h' });
+      check(tinyMetrics.nodeW >= 132, '窄容器里节点有下限，不会窄成一条色块', String(tinyMetrics.nodeW));
+      check(tg.graphMetricsFor({ width: 0, columns: 3, orientation: 'h' }).nodeW > 0,
+        '量不到宽度时退回默认尺寸（SSR 静态渲染里也不能崩）');
+
+      // ---- 连线不穿节点：几何断言，而不是「看着像没有」----
+      //
+      // 这是最容易悄悄退化的一处：连线压过某个方框时，图上看起来像「这几项是连着的」，
+      // 读图的人不会想到那是渲染问题。
+      const samplePath = (d) => {
+        const points = [];
+        let cursor = { x: 0, y: 0 };
+        for (const token of String(d).matchAll(/([MLC])\s*([-\d.\s,]+)/g)) {
+          const nums = (token[2].match(/-?\d+(?:\.\d+)?/g) ?? []).map(Number);
+          if (token[1] === 'M' || token[1] === 'L') {
+            cursor = { x: nums[0], y: nums[1] };
+            points.push({ ...cursor });
+            continue;
+          }
+          const [x1, y1, x2, y2, x3, y3] = nums;
+          for (let step = 1; step <= 12; step += 1) {
+            const t = step / 12;
+            const u = 1 - t;
+            points.push({
+              x: (u ** 3) * cursor.x + 3 * (u ** 2) * t * x1 + 3 * u * (t ** 2) * x2 + (t ** 3) * x3,
+              y: (u ** 3) * cursor.y + 3 * (u ** 2) * t * y1 + 3 * u * (t ** 2) * y2 + (t ** 3) * y3,
+            });
+          }
+          cursor = { x: x3, y: y3 };
+        }
+        return points;
+      };
+      // 跨层依赖（t1 → t4）正是贝塞尔会斜穿中间那一列的场合。
+      const crossView = {
+        plan: chainView.plan,
+        progress: chainView.progress,
+        tasks: [
+          taskFixture('t1', { seq: 1, title: '起点', state: 'done', depth: 0, runId: 'r1', runStatus: 'completed', startedAt: 0, endedAt: 1000 }),
+          taskFixture('t2', { seq: 2, title: '并行的甲', agentName: '工程师', state: 'done', depth: 1, runId: 'r2', runStatus: 'completed', startedAt: 0, endedAt: 1000 }),
+          taskFixture('t3', { seq: 3, title: '并行的乙', agentName: '写手', state: 'running', depth: 1, runId: 'r3', runStatus: 'running', startedAt: 0, live: { tokPerS: 12, tokPerSEstimated: false, tools: 1 } }),
+          taskFixture('t4', { seq: 4, title: '汇合点', agentName: '审核员', state: 'waiting', depth: 2, deps: ['t1', 't2'], waitingFor: ['t2'] }),
+        ],
+        edges: [{ from: 't1', to: 't2' }, { from: 't1', to: 't3' }, { from: 't1', to: 't4' }, { from: 't2', to: 't4' }],
+      };
+      const crossLayout = tg.graphLayout(crossView, { nodeW: 180, nodeH: 72, padX: 12, padY: 12, gapX: 44, gapY: 18 }, 'h');
+      check(crossLayout.edges.some((edge) => edge.style === 'ortho'),
+        '跨层依赖走正交折线（贝塞尔会斜穿中间那一列）');
+      let crossings = 0;
+      for (const edge of crossLayout.edges) {
+        for (const point of samplePath(edge.path)) {
+          for (const node of crossLayout.nodes) {
+            if (node.id === edge.from || node.id === edge.to) continue;
+            if (point.x > node.x + 1.5 && point.x < node.x + node.w - 1.5
+              && point.y > node.y + 1.5 && point.y < node.y + node.h - 1.5) crossings += 1;
+          }
+        }
+      }
+      check(crossings === 0, '没有任何一条连线穿过别的任务方框', `穿过 ${crossings} 次`);
+
+      // 「深底 + 黑字」的回归：SVG 文字默认是黑色，必须显式给填充。
+      check(/\.sbh-node__title\{[^}]*fill:currentColor/.test(clientSource),
+        '节点标题显式给 fill:currentColor（否则深色主题下是深底黑字，看不见）');
+      check(/\.sbh-node__meta\{[^}]*fill:currentColor/.test(clientSource), '节点元信息同样显式给 fill');
+      check(/\.sbh-graph\{color:var\(--dsw-alias-label-primary/.test(clientSource),
+        '图容器设置文字颜色（currentColor 需要有可继承的来源）');
+      check(!/\.sbh-node__(title|meta|id|chip)\{[^}]*fill:#[0-9a-f]{3,6}/i.test(clientSource),
+        '节点文字不写死十六进制色值（换主题就废）');
       const progress = tg.progressView(chainView.progress);
       check(Math.round(progress.segments.reduce((sum, segment) => sum + segment.flex, 0)) === 100,
         '进度条分段按任务数占比铺满（不是一根不说明问题的百分比条）');

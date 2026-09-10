@@ -911,6 +911,9 @@ test('链路：建清单即激活第一层，依赖完成后宿主自动激活�
 
   const created = await planTool.execute({
     title: '三段链路',
+    // 这个用例要看**中间态**（谁在等谁），所以显式关掉「等整条链路跑完」。
+    // 默认是等的——理由是：主对话一旦结束回合，就没有人在等这条链路了（见下一个用例）。
+    wait_for_chain: false,
     tasks: [
       { id: 'spec', title: '调研现状', agent: '研究员', brief: '把 X 的现状调研清楚' },
       { id: 'impl', title: '按结论实现', agent: '工程师', brief: '按上游结论实现', deps: ['spec'] },
@@ -952,6 +955,110 @@ test('链路：建清单即激活第一层，依赖完成后宿主自动激活�
   assert.equal(hub.store.getRun(implTask.runId).taskKey, 'impl');
   assert.equal(implTask.attempts, 1);
 
+  hub.close();
+});
+
+test('链路：subagent_plan 默认等整条链路跑完，并把各任务产出一起带回来', async () => {
+  const hub = makeHub();
+  seedChainAgents(hub.store);
+  hub.store.setEnabled(true);
+  hub.built.install();
+
+  const created = await hub.registered.get('subagent_plan').execute({
+    title: '一口气跑完',
+    tasks: [
+      { id: 'a', title: '第一步', agent: '研究员' },
+      { id: 'b', title: '第二步', agent: '工程师', deps: ['a'] },
+    ],
+  }, parentExec);
+
+  // 关键：工具**返回时链路已经跑完**。默认不等的话，主对话一结束回合，
+  // 就再没有任何人在等这条链路——「子 agent 没跑完，主对话已经结束」正是这个原因。
+  assert.equal(created.error, '');
+  assert.equal(created.settled, true, '默认必须等到链路结算（而不是建完就撒手）');
+  assert.match(created.chain, /进度 2\/2/);
+  assert.match(created.chain, /各任务产出：/, '产出要随结果一起回给主对话，省掉一轮追问');
+  assert.match(created.chain, /子 agent 的产出/);
+  const view = hub.tasks.board(created.plan_id);
+  assert.deepEqual(view.tasks.map((task) => task.state), ['done', 'done']);
+  assert.equal(hub.spawned.length, 2);
+
+  hub.close();
+});
+
+test('链路：主对话结束了回合也不会彻底卡死——父 agent 被钉住，回来时能接着推', async () => {
+  const hub = makeHub({ fake: { chunkDelayMs: 60 } });
+  seedChainAgents(hub.store);
+  hub.store.setEnabled(true);
+  hub.built.install();
+
+  // 关掉「等链路」＝模拟主对话建完就结束了回合。
+  const created = await hub.registered.get('subagent_plan').execute({
+    title: '回合结束的链路',
+    wait_for_chain: false,
+    tasks: [
+      { id: 'a', title: '第一步', agent: '研究员' },
+      { id: 'b', title: '第二步', agent: '工程师', deps: ['a'] },
+      { id: 'c', title: '第三步', agent: '审核员', deps: ['b'] },
+    ],
+  }, parentExec);
+  const planId = created.plan_id;
+  assert.equal(hub.spawned.length, 1);
+
+  // 关键一步：从此刻起**按会话查不到活动 agent 了**（等于主对话那个回合已经不在了）。
+  // 后面的激活只能靠「建单时钉住的父 agent 实例」，钉不住就走不下去。
+  const realCtx = hub.ctx;
+  const originalGet = realCtx.get;
+  realCtx.get = (name) => {
+    if (name === 'agents') return { get: () => undefined, bySession: () => undefined, resolve: () => undefined };
+    return originalGet.call(realCtx, name);
+  };
+
+  // 第一项跑完 → 下游仍然会被激活（父 agent 实例已经被钉住，不再依赖「查得到活动会话」）。
+  const chained = await waitForPlan(hub, planId, (view) => view.progress.done === 3);
+  assert.deepEqual(chained.tasks.map((task) => task.state), ['done', 'done', 'done'],
+    '钉住的父 agent 让链路在主对话离开之后仍然走得下去');
+  assert.equal(hub.spawned.length, 3);
+
+  realCtx.get = originalGet;
+  hub.close();
+});
+
+test('链路：父 agent 拿不到时如实记下原因，并在主对话回到会话时自动续跑', async () => {
+  // 这个用例模拟「父会话那一刻查不到活动 agent」：先是修不好，然后才可用。
+  let resolvable = false;
+  const hub = makeHub({ fake: { chunkDelayMs: 30 } });
+  seedChainAgents(hub.store);
+  hub.store.setEnabled(true);
+  hub.built.install();
+
+  // 让 agents.get() 在 resolvable=false 时查不到（等价于「活动会话暂时不在」）。
+  const realCtx = hub.ctx;
+  const originalGet = realCtx.get;
+  realCtx.get = (name) => {
+    if (name === 'agents' && resolvable !== true) return { get: () => undefined, bySession: () => undefined, resolve: () => undefined };
+    return originalGet.call(realCtx, name);
+  };
+
+  // 建单时连父 agent 都不给（面板路径才会这样），于是激活失败并**写清原因**。
+  const created = hub.tasks.createPlan({
+    title: '等父会话回来',
+    tasks: [{ id: 'a', title: '第一步', agent: '研究员' }],
+  }, { parentSessionId: 'parent-1', invokedBy: 'panel' });
+  assert.equal(created.started.length, 0);
+  const stalled = hub.tasks.board(created.board.plan.id);
+  assert.equal(stalled.tasks[0].state, 'ready', '任务停在「可执行」，而不是假装配发');
+  assert.match(stalled.plan.activationError, /无法自动激活/);
+  assert.match(stalled.plan.activationError, /手动放行/, '要给出可执行的下一步');
+
+  // 主对话回来了（同一会话里出现用户消息）→ 自动续跑。
+  resolvable = true;
+  hub.emit('parent-1', 'user/message', { content: [{ type: 'text', text: '继续' }] });
+  const resumed = await waitForPlan(hub, created.board.plan.id, (view) => view.progress.done === 1);
+  assert.equal(resumed.tasks[0].state, 'done');
+  assert.equal(resumed.plan.activationError, '', '重新跑起来之后，那条「卡住了」的提示要被清掉');
+
+  realCtx.get = originalGet;
   hub.close();
 });
 
@@ -1081,6 +1188,8 @@ test('子 agent 可以查看任务清单（只读）：看得到自己在链路�
 
   const created = await hub.registered.get('subagent_plan').execute({
     title: '可见性链路',
+    // 要看运行中的状态，所以不等整条链路跑完。
+    wait_for_chain: false,
     tasks: [
       { id: 'a', title: '第一步', agent: '研究员' },
       { id: 'b', title: '第二步', agent: '工程师', deps: ['a'] },
