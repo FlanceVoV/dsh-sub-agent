@@ -7,6 +7,22 @@
 
 ---
 
+## 长什么样
+
+左侧是主对话，右侧是插件的悬浮球面板（已展开）。图是实际运行的截图，点开可看原尺寸。
+
+**评分排名表** —— 面板列出全部已配置的子 agent（各自的模型与工具策略），并显示谁在跑、哪个已归档：
+
+[![悬浮球面板与评分排名表](assets/screenshots/evaluation-boards.png)](assets/screenshots/evaluation-boards.png)
+
+**实时输出详情** —— 点开某次运行即进入详情：逐 token 输出、tool 调用与产出文件，底部可确认该次运行的状态：
+
+[![悬浮球面板与实时输出详情](assets/screenshots/run-detail.png)](assets/screenshots/run-detail.png)
+
+> 图里的 agent 名、模型 ID 与评测分数都是真实运行产生的数据。本插件不附带任何预设配置，第一次打开时列表是空的。
+
+---
+
 ## 版本兼容性（先读这一节）
 
 本插件大量使用 DSH 的**内部**接口 —— `ctx.subagents.start`、`session/event` 的 `{global:true}` 语义、
@@ -52,7 +68,9 @@ DSH 没有把版本做成服务（已核实：没有 `ctx.get('version')`，`plu
 
 ## 安装
 
-从 GitHub 安装：
+> **本插件未发布到 npm。** 请按下面的方式从 GitHub 安装，`npm i dsh-subagent-hub` 这类命令不会成功。
+
+从 GitHub 安装（需要本机有 `git`，pnpm 靠它取仓库）：
 
 ```powershell
 dsh plugin --profile web add github:FlanceVoV/dsh-sub-agent
@@ -62,12 +80,16 @@ dsh plugin --profile web add github:FlanceVoV/dsh-sub-agent
 > 对账 `dsh.profile.bundles`），所以 pnpm 认识的 spec 它都收：`github:` 简写、完整 git URL、
 > tarball、`link:`/`file:` 本地路径。
 >
-> 等价的完整写法（想钉某个 commit / tag 时用这个）：
+> 等价的完整写法，以及锁定版本的写法：
 >
 > ```powershell
 > dsh plugin --profile web add https://github.com/FlanceVoV/dsh-sub-agent.git
-> dsh plugin --profile web add github:FlanceVoV/dsh-sub-agent#v0.1.0
+> dsh plugin --profile web add github:FlanceVoV/dsh-sub-agent#<tag 或 commit>
 > ```
+>
+> 注意上面的 `#<tag 或 commit>` 是**你自己要填的**——本仓库目前**没有打过 tag**。
+> 不写 `#…` 就是每次重装都拿最新的 `master`，介意漂移的话请先打 tag 再用。
+
 
 从本地目录安装（二次开发时用，改完代码热更新）：
 
@@ -368,6 +390,7 @@ lib/parts/*.js         客户端分片（唯一真相来源）
 lib/client.js          客户端 bundle（构建产物，勿手改）
 tests/                 单元 / 集成测试
 scripts/               build-client / verify-client / dev-server / check-publish / pack
+assets/screenshots/    README 用的界面截图（仅供展示，不参与构建与打包）
 ```
 
 ## 已知限制
