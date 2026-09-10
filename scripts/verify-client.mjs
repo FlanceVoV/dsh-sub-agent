@@ -263,6 +263,36 @@ if (exports !== undefined) {
   // 刻意不进位：秒级精度在一颗圆球里没有决策价值，还会挤坏布局。
   check(internal.formatDuration?.(65_000) === '1min', '不足 1 分钟的部分被舍去（只有 25s/25min/1h/1h25m 四档）');
   check(internal.compactTokens?.(12_345) === '12k', 'compactTokens 正确', `实际 ${internal.compactTokens?.(12_345)}`);
+
+  // ---- 拖拽缩放的几何（回归：曾经「只能上下拖、左右拖不动」）----
+  //
+  // 那次错在宽度用了「指针到卡片右边界的距离」，而把手本来就贴在右边界上 →
+  // 第一帧恒为 0、立刻被夹到最小值，横向等于拖不动。这里把它变成数字断言：
+  // **小幅横向位移必须真的改变宽度**，两个轴用同一种算法。
+  const resizeBox = internal.resizePanelBox;
+  check(typeof resizeBox === 'function', '导出面板缩放的几何函数（手感问题也能被断言）');
+  const dragBase = {
+    startWidth: 560, startHeight: 560, startLeft: 300, startTop: 100,
+    viewportWidth: 1440, viewportHeight: 900,
+  };
+  const grewRight = resizeBox?.({ ...dragBase, dx: 40, dy: 0 }) ?? {};
+  check(grewRight.width === 600, '往右拖 40px 就变宽 40px（小位移立刻生效）', `实际 ${grewRight.width}`);
+  const shrankLeft = resizeBox?.({ ...dragBase, dx: -40, dy: 0 }) ?? {};
+  check(shrankLeft.width === 520, '往左拖 40px 就变窄 40px（两个轴同一种算法）', `实际 ${shrankLeft.width}`);
+  const grewDown = resizeBox?.({ ...dragBase, dx: 0, dy: 40 }) ?? {};
+  check(grewDown.height === 600, '往下拖 40px 就变高 40px', `实际 ${grewDown.height}`);
+  const bothAxes = resizeBox?.({ ...dragBase, dx: 60, dy: 60 }) ?? {};
+  check(bothAxes.width === 620 && bothAxes.height === 620, '两个方向可以同时改', JSON.stringify(bothAxes));
+  const tinyDrag = resizeBox?.({ ...dragBase, dx: -1000, dy: -1000 }) ?? {};
+  check(tinyDrag.width === internal.PANEL_MIN_W && tinyDrag.height === internal.PANEL_MIN_H,
+    '拖过头时夹在下限（不会拖成一条缝）', JSON.stringify(tinyDrag));
+  const hugeDrag = resizeBox?.({ ...dragBase, dx: 5000, dy: 5000 }) ?? {};
+  check(hugeDrag.width <= dragBase.viewportWidth - 24 - dragBase.startLeft,
+    '拖过头时夹在视口内（拖出去的部分只是看不见的溢出）', JSON.stringify(hugeDrag));
+  check(hugeDrag.x === dragBase.startLeft && hugeDrag.y === dragBase.startTop,
+    '缩放时把面板钉在起始位置（把手才会一直跟着指针）', JSON.stringify(hugeDrag));
+  check(internal.clampPanelSize?.(5000, 300, 560, 'w') <= 5000, '面板尺寸上限跟着视口走');
+
   const zhKeys = Object.keys(internal.dictionaries?.zh ?? {}).sort();
   const enKeys = Object.keys(internal.dictionaries?.en ?? {}).sort();
   check(JSON.stringify(zhKeys) === JSON.stringify(enKeys), '中英词典键集一致', `${zhKeys} vs ${enKeys}`);
