@@ -54,7 +54,7 @@ const silentLog = { info() {}, warn() {}, error() {}, debug() {} };
  * `stopReason` 可以给一个**函数**：任务链路要验「上游失败 → 下游阻塞 → 重试后恢复」，
  * 那就必须能让同一个假运行时在第二次跑时给出不同的结果。
  */
-function makeFakeDsh({ chunkDelayMs = 50, stopReason = 'completed', output = '子 agent 的产出' } = {}) {
+function makeFakeDsh({ chunkDelayMs = 50, stopReason = 'completed', output = '子 agent 的产出', usage = { outputTokens: 10, inputTokens: 5 } } = {}) {
   /** @type {Map<string,Function[]>} */
   const listeners = new Map();
   const spawned = [];
@@ -122,7 +122,9 @@ function makeFakeDsh({ chunkDelayMs = 50, stopReason = 'completed', output = '�
         await new Promise((resolve) => setTimeout(resolve, chunkDelayMs));
         emit(sessionId, 'assistant/message', {
           message: { content: [{ type: 'text', text: output }] },
-          usage: { outputTokens: 10, inputTokens: 5 },
+          // usage 可以显式给 null：模拟「provider 一个字都没产出就失败了」这种真实情况
+          // （本地推理服务没起来时就是这个样子——stopReason 是 error，却没有任何错误文本）。
+          ...(usage === null ? {} : { usage }),
         });
         return { stopReason: typeof stopReason === 'function' ? stopReason() : stopReason, output };
       })();
@@ -1114,7 +1116,7 @@ test('链路：关掉自动激活后，下游只标「可执行」；打开的�
 
 test('链路：上游失败 → 下游「被上游阻塞」（不是「等待」）→ 重试上游后链路自己恢复', async () => {
   let failNext = true;
-  const hub = makeHub({ fake: { stopReason: () => (failNext ? 'error' : 'completed') } });
+  const hub = makeHub({ fake: { stopReason: () => (failNext ? 'error' : 'completed'), usage: null } });
   seedChainAgents(hub.store);
   hub.store.setEnabled(true);
   hub.built.install();
@@ -1131,6 +1133,10 @@ test('链路：上游失败 → 下游「被上游阻塞」（不是「等待」
   const broken = await waitForPlan(hub, planId, (view) => view.tasks[0].state === 'failed');
   assert.equal(broken.tasks[0].state, 'failed');
   assert.equal(broken.tasks[0].note.length > 0, true, '失败原因要留在任务上，否则界面只能显示一个红色的点');
+  // DSH 偶尔会给出「error 但没有任何错误文本」；那时唯一可靠的线索是「一个 token 都没产出」，
+  // 说明模型根本没被调用成功——把往哪查说出来，比「没有更多信息」有用得多。
+  assert.match(broken.tasks[0].note, /一个 token 都没产出/);
+  assert.match(broken.tasks[0].note, /本地推理服务/, '要给出可查的方向，而不是让人从零开始排查');
   assert.equal(broken.tasks[1].state, 'blocked', '上游失败不该被含糊成「等待」——它不会自己好');
   assert.deepEqual(broken.tasks[1].blockedBy, ['a']);
   assert.equal(hub.spawned.length, 1, '被阻塞的下游绝不能被启动');
