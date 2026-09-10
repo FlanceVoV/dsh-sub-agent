@@ -14,6 +14,14 @@
   "license": "MIT",
   "private": false,
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/FlanceVoV/dsh-sub-agent.git"
+  },
+  "homepage": "https://github.com/FlanceVoV/dsh-sub-agent#readme",
+  "bugs": {
+    "url": "https://github.com/FlanceVoV/dsh-sub-agent/issues"
+  },
   "main": "./lib/host.js",
   "exports": {
     ".": "./lib/host.js",

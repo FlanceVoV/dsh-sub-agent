@@ -52,11 +52,24 @@ DSH 没有把版本做成服务（已核实：没有 `ctx.get('version')`，`plu
 
 ## 安装
 
+从 GitHub 安装：
+
 ```powershell
-dsh plugin --profile web add @<你的作用域>/dsh-subagent-hub
+dsh plugin --profile web add github:FlanceVoV/dsh-sub-agent
 ```
 
-从本地目录安装（二次开发时用）：
+> `dsh plugin` 本质是 **pnpm 的薄封装**（它在 profile 目录里跑 `pnpm <args...>`，再按装出来的实际包名
+> 对账 `dsh.profile.bundles`），所以 pnpm 认识的 spec 它都收：`github:` 简写、完整 git URL、
+> tarball、`link:`/`file:` 本地路径。
+>
+> 等价的完整写法（想钉某个 commit / tag 时用这个）：
+>
+> ```powershell
+> dsh plugin --profile web add https://github.com/FlanceVoV/dsh-sub-agent.git
+> dsh plugin --profile web add github:FlanceVoV/dsh-sub-agent#v0.1.0
+> ```
+
+从本地目录安装（二次开发时用，改完代码热更新）：
 
 ```powershell
 dsh plugin --profile web add link:<本插件目录的绝对路径>
