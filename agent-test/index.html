@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>子 Agent 协作金字塔 · DSH 0.2.0 任务链</title>
+<style>
+:root{--bg:#0d1117;--card:#161b22;--primary:#58a6ff;--accent:#f0883e;--text:#e6edf3;--text-dim:#8b949e;--border:#30363d}
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",system-ui,sans-serif;font-size:16px;line-height:1.7}
+header{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px;padding:14px 20px;background:var(--card);border-bottom:1px solid var(--border)}
+header strong{font-size:16px;letter-spacing:.02em;color:var(--text)}
+header span{font-size:13px;color:var(--text-dim)}
+.container{width:100%;max-width:960px;margin:0 auto;padding:0 20px}
+main.container{padding-bottom:0}
+main>section{padding:40px 0;border-bottom:1px solid var(--border)}
+main>section:last-of-type{border-bottom:0}
+h2{margin:0 0 6px;font-size:22px;line-height:1.4;color:var(--text)}
+.hero{padding:56px 0 44px;text-align:center}
+.hero .container{max-width:none;padding:0}
+.hero h1{margin:0 0 14px;font-size:34px;line-height:1.25;color:var(--text)}
+.hero p{margin:6px 0;color:var(--text-dim);font-size:15px}
+.pyramid{display:flex;flex-direction:column;align-items:center;gap:14px;margin-top:18px}
+.pyramid-row{display:flex;gap:10px;margin:0 auto;max-width:100%}
+.pyramid-row>div{flex:1 1 0;min-width:0;padding:12px 8px;text-align:center;background:var(--card);border:1px solid var(--border);border-radius:8px;font-size:14px;color:var(--text)}
+.row-w20{width:20%}
+.row-w40{width:40%}
+.row-w60{width:60%}
+.deps ul{margin:14px 0 0;padding:0;list-style:none;display:grid;gap:10px}
+.deps li{padding:12px 14px;background:var(--card);border:1px solid var(--border);border-left:3px solid var(--accent);border-radius:6px;font-family:ui-monospace,SFMono-Regular,Consolas,"Courier New",monospace;font-size:14px;word-break:break-word}
+.deps p{margin:14px 0 0;font-size:14px;color:var(--text-dim)}
+.table{width:100%;margin-top:16px;border-collapse:collapse;table-layout:fixed;font-size:14px}
+.table th,.table td{border:1px solid var(--border);padding:10px 12px;text-align:left;vertical-align:top;word-break:break-word}
+.table thead th{background:var(--card);color:var(--primary);font-weight:600;white-space:nowrap}
+.table tbody tr:nth-child(even){background:rgba(255,255,255,.02)}
+.footer{padding:34px 20px 48px;text-align:center;color:var(--text-dim);font-size:14px;border-top:1px solid var(--border)}
+@media (max-width:640px){
+  body{font-size:15px}
+  header{padding:12px 16px}
+  .container{padding:0 16px}
+  main>section{padding:30px 0}
+  .hero{padding:38px 0 30px}
+  .hero h1{font-size:25px}
+  .hero p{font-size:14px}
+  h2{font-size:19px}
+  .pyramid{gap:10px}
+  .pyramid-row{width:100%}
+  .pyramid-row>div{padding:10px 4px;font-size:12px}
+  .deps li{font-size:12px;padding:10px 12px}
+  .table{font-size:12px}
+  .table th,.table td{padding:7px 6px}
+  .table thead th{white-space:normal}
+  .footer{padding:26px 16px 36px}
+}
+</style>
+</head>
+<body>
+<header>
+  <strong>子 Agent 协作金字塔</strong>
+  <span>DSH 0.2.0 · 任务链 pl_0384ad2ac6e3 · 9 个任务 / 5 层</span>
+</header>
+<main class="container">
+<section id="section-hero" class="hero">
+  <div class="container">
+    <h1>子 Agent 协作金字塔</h1>
+    <p>DSH 0.2.0 任务链 · 9 个任务 · 5 层 · 3 个 agent</p>
+    <p>用 1/2/3/2/1 的金字塔形状，展示一条带依赖的任务链如何并行与串行展开。</p>
+  </div>
+</section>
+<section id="section-pyramid">
+  <h2>金字塔形状：谁在什么时候并行</h2>
+  <div class="pyramid">
+    <div class="pyramid-row row-w20">
+      <div>t1 架构</div>
+    </div>
+    <div class="pyramid-row row-w40">
+      <div>t2 骨架</div>
+      <div>t3 内容</div>
+    </div>
+    <div class="pyramid-row row-w60">
+      <div>t4 Hero</div>
+      <div>t5 金字塔</div>
+      <div>t6 审查</div>
+    </div>
+    <div class="pyramid-row row-w40">
+      <div>t7 合并</div>
+      <div>t8 清单</div>
+    </div>
+    <div class="pyramid-row row-w20">
+      <div>t9 验收</div>
+    </div>
+  </div>
+</section>
+<section id="section-deps" class="deps">
+  <h2>依赖路径</h2>
+  <ul>
+    <li>t1 → t2 → t4 → t7 → t9</li>
+    <li>t1 → t3 → t5 → t7 → t9</li>
+    <li>t1 → t2 → t6 → t7 → t9</li>
+    <li>t1 → t3 → t6 → t7 → t9</li>
+  </ul>
+  <p>说明：层 2、层 3、层 4 内部为并行；层与层之间为串行依赖；关键路径长 5 跳。</p>
+</section>
+<section id="section-table">
+  <h2>任务明细表</h2>
+  <table class="table">
+    <thead>
+      <tr>
+        <th>任务</th>
+        <th>层</th>
+        <th>负责</th>
+        <th>依赖</th>
+        <th>产出</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr><td>t1</td><td>1</td><td>DeepSeek专家</td><td>-</td><td>设计规格书（文本）</td></tr>
+      <tr><td>t2</td><td>2</td><td>Deepseek研究员</td><td>t1</td><td>index.html 骨架与 CSS</td></tr>
+      <tr><td>t3</td><td>2</td><td>本地马喽</td><td>t1</td><td>content.md 文案与数据</td></tr>
+      <tr><td>t4</td><td>3</td><td>Deepseek研究员</td><td>t2, t3</td><td>sections/section-hero.html</td></tr>
+      <tr><td>t5</td><td>3</td><td>本地马喽</td><td>t2, t3</td><td>sections/section-pyramid.html</td></tr>
+      <tr><td>t6</td><td>3</td><td>DeepSeek专家</td><td>t2, t3</td><td>契约审查问题清单</td></tr>
+      <tr><td>t7</td><td>4</td><td>Deepseek研究员</td><td>t4, t5, t6</td><td>index.html 最终合并版</td></tr>
+      <tr><td>t8</td><td>4</td><td>本地马喽</td><td>t4, t5, t6</td><td>checklist.md 验收清单</td></tr>
+      <tr><td>t9</td><td>5</td><td>DeepSeek专家</td><td>t7, t8</td><td>最终验收结论</td></tr>
+    </tbody>
+  </table>
+</section>
+</main>
+<footer id="section-footer" class="footer">
+  本页面由三个能力各异的子 agent 通过任务链协作产出。
+</footer>
+</body>
+</html>

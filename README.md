@@ -12,17 +12,45 @@
 
 ## 长什么样
 
-左侧是主对话，右侧是插件的悬浮球面板（已展开）。图是实际运行的截图，点开可看原尺寸。
+下面都是实际运行的截图（点开可看原尺寸）。左侧是主对话，右侧是插件的悬浮球面板。
 
-**评分排名表** —— 面板列出全部已配置的子 agent（各自的模型与工具策略），并显示谁在跑、哪个已归档：
+### 悬浮球面板与依赖图
+
+面板列出全部已配置的子 agent（各自的模型与工具策略）、谁在跑、哪个已归档；
+多步任务还会把整条任务链画成依赖图，节点上标着负责的子 agent、状态与耗时：
+
+[![悬浮球面板、子 agent 列表与任务依赖图](assets/screenshots/panel-tasks.png)](assets/screenshots/panel-tasks.png)
+
+### 工具调用与执行详情
+
+点开某次运行即进入实时详情：逐 token 输出、tool 调用与产出文件，底部可确认该次运行的状态：
+
+[![工具调用与执行详情](assets/screenshots/panel-tool-calls.png)](assets/screenshots/panel-tool-calls.png)
+
+点开正在跑的那一个，是实时视图 —— 顶部有速率与进度条，节点按状态着色，未开始的也看得见：
+
+[![正在运行中的子 agent 实时视图](assets/screenshots/panel-run-live.png)](assets/screenshots/panel-run-live.png)
+
+### 任务链详情
+
+面板里点开某条任务链，或从设置页进入，可以看到它的依赖图、当前进度与完整任务清单。
+节点按状态着色，已完成 / 进行中 / 已阻塞分得开：
+
+[![任务链依赖图](assets/screenshots/settings-task-chain.png)](assets/screenshots/settings-task-chain.png)
+
+同一视图往下滚，是逐条任务的清单 —— 每条标着负责的子 agent 与耗时，底部给出「下一步」该跑哪些：
+
+[![任务清单与下一步](assets/screenshots/settings-task-detail.png)](assets/screenshots/settings-task-detail.png)
+
+### 评分与实时输出
+
+跨子 agent 的评分排名表，以及带逐 token 输出的运行详情：
 
 [![悬浮球面板与评分排名表](assets/screenshots/evaluation-boards.png)](assets/screenshots/evaluation-boards.png)
 
-**实时输出详情** —— 点开某次运行即进入详情：逐 token 输出、tool 调用与产出文件，底部可确认该次运行的状态：
-
 [![悬浮球面板与实时输出详情](assets/screenshots/run-detail.png)](assets/screenshots/run-detail.png)
 
-> 图里的 agent 名、模型 ID 与评测分数都是真实运行产生的数据。本插件不附带任何预设配置，第一次打开时列表是空的。
+> 图里的 agent 名、模型 ID、任务清单与评测分数都是真实运行产生的数据。本插件不附带任何预设配置，第一次打开时列表是空的。
 
 ---
 
