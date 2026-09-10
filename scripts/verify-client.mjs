@@ -479,6 +479,7 @@ if (react === undefined) {
       check(!settings.includes('>fork<'), '不支持 agentOptions 的传输被排除在可选列表外');
       check(settings.includes('>spawn<'), '支持模型绑定的传输出现在可选列表里');
       check(settings.includes('sbh-boards'), '配置页里包含了排名/回归区块（需求 5）');
+      check(settings.includes('任务链路'), '配置页里有任务链路区块（0.2.0：依赖图与手动推进入口）');
 
       // 归档按钮必须真的渲染出来——真机上「点了没反应」时，先要能确认这个控件存在。
       check(settings.includes('🗑'), '列表里有归档按钮');
@@ -636,6 +637,139 @@ if (react === undefined) {
       check(!boardsHtml.includes('没用过'), '没有任何运行/评价的 agent 不出现在排名里');
       check(boardsHtml.includes('sbh-delta--down') && boardsHtml.includes('-20'), '回归表标出退步 20 分');
       check(boardsHtml.includes('同一个任务'), '回归表显示 task_key');
+
+      // ---- 任务链路图（0.2.0）----
+      //
+      // 图的价值全在**坐标**：连线错位比没有连线更糟（它会让人读出一条不存在的依赖），
+      // 而错位在浏览器里看起来永远像「渲染慢」。所以这里断言的是布局的数值性质，
+      // 而不是「HTML 里有某个字符串」。
+      const tg = internals.taskGraph;
+      check(typeof tg?.graphLayout === 'function', '导出链路图的纯函数（布局可以被验证，而不是只能眼看）');
+
+      /** 造一条任务（只写关心的字段）。 */
+      const taskFixture = (id, overrides) => ({
+        id,
+        seq: Number(String(id).replace(/[^0-9]/g, '')) || 1,
+        title: `任务 ${id}`,
+        agentName: '研究员',
+        deps: [],
+        state: 'waiting',
+        depth: 0,
+        runId: '',
+        runStatus: '',
+        note: '',
+        attempts: 0,
+        startedAt: null,
+        endedAt: null,
+        cancelledAt: null,
+        waitingFor: [],
+        blockedBy: [],
+        live: null,
+        ...overrides,
+      });
+      const chainView = {
+        plan: { id: 'pl_1', title: '发布 0.2.0', autoActivate: true, activationError: '', parentSessionId: 's-1' },
+        tasks: [
+          taskFixture('t1', { seq: 1, title: '调研现状', state: 'done', depth: 0, runId: 'r1', runStatus: 'completed', startedAt: 0, endedAt: 5000 }),
+          taskFixture('t2', {
+            seq: 2, title: '按结论实现功能并自测', agentName: '工程师', state: 'running', depth: 1,
+            runId: 'r2', runStatus: 'running', startedAt: 0,
+            live: { tokPerS: 42.5, tokPerSEstimated: false, tools: 3, elapsedMs: 9000, tokensOut: 500, status: 'running' },
+          }),
+          taskFixture('t3', { seq: 3, title: '独立评审', agentName: '审核员', state: 'waiting', depth: 2, waitingFor: ['t2'] }),
+          taskFixture('t4', { seq: 4, title: '被上游失败卡住的收尾', agentName: '工程师', state: 'blocked', depth: 3, blockedBy: ['t9'] }),
+        ],
+        edges: [{ from: 't1', to: 't2' }, { from: 't2', to: 't3' }, { from: 't9', to: 't4' }],
+        progress: { total: 4, done: 1, running: 1, ready: 0, waiting: 1, blocked: 1, failed: 0, cancelled: 0, closed: 3, percent: 25 },
+        next: '正在跑：t2｜等依赖：t3',
+      };
+
+      const layout = tg.graphLayout(chainView);
+      check(layout.nodes.length === 4, '布局覆盖全部任务', `实际 ${layout.nodes.length}`);
+      check(layout.edges.length === 2, '只画**两端都存在**的依赖边（悬空依赖不画假线）', `实际 ${layout.edges.length}`);
+      const pos = new Map(layout.nodes.map((node) => [node.id, node]));
+      check(pos.get('t1').x < pos.get('t2').x && pos.get('t2').x < pos.get('t3').x, '依赖方向是左 → 右');
+      const insideCanvas = layout.nodes.every((node) => node.x >= 0 && node.y >= 0
+        && node.x + node.w <= layout.width && node.y + node.h <= layout.height);
+      check(insideCanvas, '每个节点都在画布内（画到框外等于看不见）', `${layout.width}×${layout.height}`);
+      let overlaps = 0;
+      for (const left of layout.nodes) {
+        for (const right of layout.nodes) {
+          if (left === right) continue;
+          const overlap = left.x < right.x + right.w && right.x < left.x + left.w
+            && left.y < right.y + right.h && right.y < left.y + left.h;
+          if (overlap) overlaps += 1;
+        }
+      }
+      check(overlaps === 0, '节点之间不重叠（重叠的框会把两个任务读成一个）', `重叠 ${overlaps} 处`);
+      const firstEdge = layout.edges[0];
+      const numbers = firstEdge.path.match(/-?\d+(\.\d+)?/g)?.map(Number) ?? [];
+      check(
+        numbers[0] === pos.get(firstEdge.from).x + pos.get(firstEdge.from).w
+        && numbers[1] === pos.get(firstEdge.from).y + pos.get(firstEdge.from).h / 2
+        && numbers[numbers.length - 2] === pos.get(firstEdge.to).x
+        && numbers[numbers.length - 1] === pos.get(firstEdge.to).y + pos.get(firstEdge.to).h / 2,
+        '连线从上游客的右边连到下游客的左边（不穿过节点）',
+        firstEdge.path,
+      );
+
+      check(tg.edgeVisualState('done') === 'done' && tg.edgeVisualState('running') === 'active'
+        && tg.edgeVisualState('waiting') === 'pending' && tg.edgeVisualState('failed') === 'pending',
+      '依赖边的样式只由**上游**决定：完成/在跑/其它三种');
+
+      // 折行与截断：SVG 没有 text-overflow，画出去就回不来了。
+      const wrapped = tg.wrapLabel('把 release 0.2.0 的任务链路图发出去', 8, 2);
+      check(wrapped.length === 2, '长标题折成两行', JSON.stringify(wrapped));
+      check(wrapped.every((line) => tg.visualWidth(line) <= 8), '每行都不超过给定的视觉宽度', JSON.stringify(wrapped));
+      const clipped = tg.truncateVisual('一二三四五六七八九十', 5);
+      check(clipped.endsWith('…') && tg.visualWidth(clipped) <= 5, '超宽文本被截断并以 … 结尾', clipped);
+      check(tg.visualWidth('abc') < tg.visualWidth('一个汉字'), '拉丁字符按更窄处理（中英混排不会忽长忽短）');
+      const progress = tg.progressView(chainView.progress);
+      check(Math.round(progress.segments.reduce((sum, segment) => sum + segment.flex, 0)) === 100,
+        '进度条分段按任务数占比铺满（不是一根不说明问题的百分比条）');
+
+      const graphHtml = ReactDOMServer.renderToStaticMarkup(h(exports.TaskGraph, { view: chainView }));
+      check(graphHtml.includes('sbh-graph__svg'), '链路图渲染出 SVG');
+      check(['done', 'running', 'waiting', 'blocked'].every((state) => graphHtml.includes(`sbh-node--${state}`)),
+        '四种状态各有类名（颜色由 CSS 给，JS 不写死色值）');
+      check(graphHtml.includes('sbh-edge--done') && graphHtml.includes('sbh-edge--active'),
+        '已解锁与正在流动的依赖连线各有一套样式（上游完成后连线才变实）');
+      check(graphHtml.includes('sbh-graph-arrow-active'), '连线带箭头（方向不该靠猜）');
+      check(graphHtml.includes('工程师') && graphHtml.includes('42.5'), '节点上能看出谁在做、跑多快');
+      check(graphHtml.includes('等 t2'), '等待中的节点写清在等谁');
+      check(graphHtml.includes('t9 失败/取消'), '被阻塞的节点写清是哪个上游失败了');
+      check(!graphHtml.includes('undefined') && !graphHtml.includes('NaN'), '渲染结果里不能出现 undefined / NaN');
+
+      const panelTasksHtml = ReactDOMServer.renderToStaticMarkup(h(exports.PanelTasks, {
+        frame: {
+          plans: [chainView, { ...chainView, plan: { ...chainView.plan, id: 'pl_2', title: '另一条链路' } }],
+          total: 3,
+          truncated: true,
+        },
+        onOpenRun: () => {},
+      }));
+      check(panelTasksHtml.includes('发布 0.2.0'), '面板区块显示清单名');
+      check(panelTasksHtml.includes('sbh-tab'), '多条链路时给出切换标签');
+      check(panelTasksHtml.includes('sbh-progress__seg--running'), '面板里也有分段进度条');
+      check(panelTasksHtml.includes('共 3 条清单'), '被截断时如实说明还有更多（不假装这就是全部）');
+      check(
+        ReactDOMServer.renderToStaticMarkup(h(exports.PanelTasks, { frame: { plans: [] } })) === '',
+        '没有链路时面板区块整个不渲染（不留一个空区块）',
+      );
+
+      const cardHtml = ReactDOMServer.renderToStaticMarkup(h(exports.PlanCard, {
+        view: chainView,
+        actions: h('button', { type: 'button', className: 'sbh-mini-btn' }, '激活 1 项'),
+        onOpenRun: () => {},
+      }));
+      check(cardHtml.includes('自动激活'), '卡片标明这条链路的激活方式（自动/手动）');
+      check(cardHtml.includes('看运行'), '有运行记录的任务给出「看运行」入口（点进已有的详情页）');
+      check(cardHtml.includes('1/4 · 25%'), '卡片显示进度数字');
+      check(exports.normalizeTaskFrame({ plans: 'x' }) === undefined, '形状不对的任务负载被拒绝，而不是画出一堆 undefined');
+      const normalized = exports.normalizeTaskFrame({ plans: [chainView], total: 9, truncated: true });
+      check(normalized.plans.length === 1 && normalized.truncated === true && normalized.total === 9, '正常负载按原样通过');
+      check(exports.normalizeTaskFrame({ plans: [null, { tasks: [] }, chainView] }).plans.length === 1,
+        '坏条目被丢掉，好条目照画（一个坏清单不该让整块面板白屏）');
 
       // ---- 运行护栏（并发上限必须能改，不能写死）----
       const guardsHtml = ReactDOMServer.renderToStaticMarkup(h(exports.RunGuardsView, {

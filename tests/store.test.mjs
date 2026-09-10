@@ -1,10 +1,11 @@
 /**
  * 存储层的测试。
  *
- * 覆盖三类容易出错的地方：
+ * 覆盖四类容易出错的地方：
  *  1. **身份守卫**：拿错文件必须拒绝，而不是往别人的库里写。
  *  2. **排名与回归的口径**：这两件事只要口径漂了，页面上的名次就是误导性的。
  *  3. **清理**：保留策略必须在事务里同时删评价与运行，不能留下孤儿。
+ *  4. **任务清单**：清单内 id 唯一、按 run 反查任务、以及老库的升级路径。
  */
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -12,7 +13,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, test } from 'node:test';
 import { DatabaseSync } from 'node:sqlite';
-import { APPLICATION_ID, HubStore } from '../lib/src/store.js';
+import { APPLICATION_ID, HubStore, SCHEMA_VERSION } from '../lib/src/store.js';
 import { HubRuntime } from '../lib/src/runtime.js';
 
 /** 每个测试用独立临时目录，避免互相污染。 */
@@ -328,6 +329,86 @@ test('application_id 与 schema 版本被正确写入', () => {
   const appId = Number(store.require().prepare('PRAGMA application_id').get()?.application_id);
   const version = Number(store.require().prepare('PRAGMA user_version').get()?.user_version);
   assert.equal(appId, APPLICATION_ID);
-  assert.equal(version, 1);
+  // 断言对上**导出的常量**而不是字面量：升级时只该改一处，否则「忘了改代码」
+  // 与「测试忘了跟着改」这两种情况在失败信息里分不出来。
+  assert.equal(version, SCHEMA_VERSION);
   store.close();
+});
+
+test('任务清单：清单内 id 唯一、按 run 反查任务、删除连带清任务', () => {
+  const store = openStore();
+  store.insertPlan({ id: 'pl_a', title: '链路 A', parentSessionId: 's-1', autoActivate: true });
+  store.insertTasks('pl_a', [
+    { id: 't1', seq: 1, title: '调研', agentName: '研究员', deps: [] },
+    { id: 't2', seq: 2, title: '实现', agentName: '工程师', deps: ['t1'] },
+  ]);
+
+  const plan = store.getPlan('pl_a');
+  assert.equal(plan.title, '链路 A');
+  assert.equal(plan.autoActivate, true);
+  assert.equal(plan.activationError, '');
+
+  const tasks = store.listTasks('pl_a');
+  assert.deepEqual(tasks.map((item) => item.id), ['t1', 't2']);
+  assert.deepEqual(tasks[1].deps, ['t1'], 'deps 必须原样存取（它是依赖图的唯一来源）');
+  assert.equal(tasks[0].runId, '');
+  assert.equal(tasks[0].runStatus, '');
+
+  // 同一个 id 在**另一条**清单里可以存在（id 是清单内唯一的），但在同一条里不行。
+  store.insertPlan({ id: 'pl_b', title: '链路 B', autoActivate: false });
+  store.insertTasks('pl_b', [{ id: 't1', seq: 1, title: '另一条链路的调研', agentName: '研究员', deps: [] }]);
+  assert.equal(store.getTask('pl_b', 't1').title, '另一条链路的调研');
+  assert.throws(
+    () => store.insertTasks('pl_b', [{ id: 't1', seq: 2, title: '重复', agentName: '研究员', deps: [] }]),
+    /UNIQUE|constraint/i,
+    '同一条清单里重复的任务 id 必须被数据库拒绝（依赖靠它指认）',
+  );
+
+  store.updateTask('pl_a', 't2', { runId: 'r-9', runStatus: 'running', attempts: 1, startedAt: 123 });
+  const running = store.getTask('pl_a', 't2');
+  assert.equal(running.runId, 'r-9');
+  assert.equal(running.runStatus, 'running');
+  assert.equal(running.attempts, 1);
+  assert.equal(running.startedAt, 123);
+  assert.deepEqual(store.taskByRun('r-9'), running, '运行结束事件只能靠 run id 找回任务');
+  assert.equal(store.taskByRun('r-不存在'), undefined);
+
+  assert.equal(store.deletePlan('pl_a'), 2);
+  assert.equal(store.getPlan('pl_a'), undefined);
+  assert.deepEqual(store.listTasks('pl_a'), []);
+  assert.equal(store.listPlans().length, 1, '删一条清单不该动到别的清单');
+  store.close();
+});
+
+test('schema 升级：老库（user_version=1）能被补建任务表并升到当前版本', () => {
+  // 真机上已经存在 0.1.x 的库，升级后必须能直接打开。只加表的迁移是幂等的，
+  // 但**必须真的验一遍**：写错一个 IF NOT EXISTS 就会让老用户起不来。
+  const path = tempDbPath('old.db');
+  const legacy = new DatabaseSync(path);
+  legacy.exec('PRAGMA application_id = 0x53554241');
+  legacy.exec(`CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER NOT NULL)`);
+  legacy.exec(`CREATE TABLE IF NOT EXISTS agents (
+    id TEXT PRIMARY KEY, name TEXT NOT NULL, note TEXT NOT NULL DEFAULT '', transport TEXT NOT NULL DEFAULT 'spawn',
+    model_provider TEXT NOT NULL DEFAULT '', model_id TEXT NOT NULL DEFAULT '', api_base TEXT NOT NULL DEFAULT '',
+    credential_ref TEXT NOT NULL DEFAULT '', max_context INTEGER NOT NULL DEFAULT 0, max_tokens INTEGER NOT NULL DEFAULT 0,
+    reasoning_effort TEXT NOT NULL DEFAULT '', tool_policy TEXT NOT NULL DEFAULT 'inherit', persona TEXT NOT NULL DEFAULT '',
+    created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, archived_at INTEGER)`);
+  legacy.exec('PRAGMA user_version = 1');
+  legacy.prepare('INSERT INTO agents (id, name, created_at, updated_at) VALUES (?, ?, ?, ?)').run('a-old', '老配置', 1, 1);
+  legacy.close();
+
+  const store = new HubStore({ dbPath: path, log: undefined }).open();
+  assert.deepEqual(store.schemaUpgrade, { from: 1, to: SCHEMA_VERSION }, '升级过就要说出来（启动日志会打这一条）');
+  assert.equal(store.listAgents().length, 1, '老数据必须还在');
+  // 升完立刻可用：建一条清单不该因为「库是老的」而失败。
+  store.insertPlan({ id: 'pl_old', title: '老库新清单', autoActivate: true });
+  store.insertTasks('pl_old', [{ id: 't1', seq: 1, title: 'A', agentName: '老配置', deps: [] }]);
+  assert.equal(store.listTasks('pl_old').length, 1);
+  store.close();
+
+  // 再打开一次不该报「又升级了」：幂等性是这个迁移的全部前提。
+  const reopened = new HubStore({ dbPath: path, log: undefined }).open();
+  assert.equal(reopened.schemaUpgrade, null);
+  assert.equal(reopened.listTasks('pl_old').length, 1);
+  reopened.close();
 });

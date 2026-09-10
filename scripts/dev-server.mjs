@@ -20,6 +20,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { normalizeConfig } from '../lib/src/config.js';
 import { createHandler, ROUTE_PREFIX } from '../lib/src/http.js';
+import { createTaskBoard } from '../lib/src/tasks.js';
 import { buildTools } from '../lib/src/tools.js';
 import { HubRuntime } from '../lib/src/runtime.js';
 import { HubStore } from '../lib/src/store.js';
@@ -85,7 +86,11 @@ const ctx = makeFakeCtx();
 const runtime = new HubRuntime({ ctx, store, config, log });
 runtime.attach();
 runtime.reconcileStaleRuns();
-const context = { ctx, store, runtime, config, log, dataDir: join(dbPath, '..'), dbPath, version: 'dev' };
+// 任务清单服务要挂上：离线宿主的价值就在于「改一次宿主代码就能用 curl 验完」，
+// 少了它，/tasks 这一整块在离线环境里就验不了（而它恰恰是最需要手验的部分）。
+const tasks = createTaskBoard({ ctx, store, runtime, config, log });
+tasks.attach();
+const context = { ctx, store, runtime, tasks, config, log, dataDir: join(dbPath, '..'), dbPath, version: 'dev' };
 const built = buildTools(context);
 for (const warning of built.warnings) log.warn(warning);
 built.install();
@@ -115,6 +120,8 @@ server.listen(args.port, args.host, () => {
   log.info(`  curl.exe -sS "${base}/state?sessionId=s-1"`);
   log.info(`  curl.exe -sS -X POST ${base}/agents -H "content-type: application/json" -d "{\\"name\\":\\"写手\\",\\"transport\\":\\"spawn\\",\\"modelProvider\\":\\"deepseek-official\\",\\"modelId\\":\\"deepseek-v4.1\\"}"`);
   log.info(`  curl.exe -sS -X POST ${base}/enable -H "content-type: application/json" -d "{\\"sessionId\\":\\"s-1\\",\\"enabled\\":true}"`);
+  log.info(`  curl.exe -sS -X POST ${base}/tasks -H "content-type: application/json" -d "{\\"title\\":\\"示例链路\\",\\"tasks\\":[{\\"id\\":\\"e1\\",\\"title\\":\\"调研\\",\\"agent\\":\\"研究员\\"},{\\"id\\":\\"e2\\",\\"title\\":\\"复核\\",\\"agent\\":\\"审核员\\",\\"deps\\":[\\"e1\\"]}]}"`);
+  log.info(`  curl.exe -sS ${base}/tasks`);
   log.info('注意：这里没有 subagents 服务，所以 /run 会明确告诉你运行时不可用——那是刻意的降级演示。');
 });
 

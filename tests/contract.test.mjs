@@ -179,6 +179,24 @@ test('运行状态枚举在 store 与 UI 之间保持一致', async () => {
   }
 });
 
+test('任务状态枚举在宿主与客户端之间一致', async () => {
+  // 漂移的后果很隐蔽：宿主多出一种状态时，客户端不认识它——那张卡片会退化成
+  // 「一个没有颜色的框」，而没人会立刻意识到那是状态枚举漏了同步。
+  const { TASK_STATES } = await import('../lib/src/plan.js');
+  const block = /const TASK_STATE_LABEL = \{([\s\S]*?)\n\};/.exec(client)?.[1] ?? '';
+  assert.ok(block !== '', '客户端必须有 TASK_STATE_LABEL（链路图的状态文案表）');
+  const clientStates = [...block.matchAll(/([A-Za-z]+)\s*:/g)].map((match) => match[1]);
+  assert.deepEqual(
+    clientStates.slice().sort(),
+    [...TASK_STATES].slice().sort(),
+    '客户端必须认识宿主的每一个任务状态（否则那种任务在图上是说不清的）',
+  );
+  // 每一个状态还要有图例色（颜色由 CSS 给，JS 不写死色值）。
+  for (const state of TASK_STATES) {
+    assert.ok(client.includes(`.sbh-legend__dot--${state}`), `状态 ${state} 必须有图例颜色`);
+  }
+});
+
 test('lib/client.js 必须与 lib/parts/*.js 完全一致（单一真相来源）', () => {
   // 客户端 bundle 必须是单文件，所以源码按片维护、构建时拼成一个文件。
   // 这带来一个隐患：**两个真相来源**。直接改产物、或改完分片忘了构建，都会让两者漂移，
