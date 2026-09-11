@@ -296,6 +296,29 @@ if (exports !== undefined) {
   const zhKeys = Object.keys(internal.dictionaries?.zh ?? {}).sort();
   const enKeys = Object.keys(internal.dictionaries?.en ?? {}).sort();
   check(JSON.stringify(zhKeys) === JSON.stringify(enKeys), '中英词典键集一致', `${zhKeys} vs ${enKeys}`);
+
+  // ---- 团队（群组）负载的归一化（0.3.0）----
+  //
+  // 与任务图同理但更严格：群里每一行都要渲染说话人与正文，少一个字段就是一行 undefined。
+  check(exports.normalizeTeamFrame?.({}) !== undefined, '团队负载：缺 teams 也不崩（退回空帧）');
+  check(exports.normalizeTeamFrame?.(null) === undefined, '团队负载：null 被拒绝');
+  check(exports.normalizeTeamFrame?.({ teams: [null, { name: '没有 id' }] })?.teams.length === 0,
+    '团队负载：坏条目被丢掉（没有 id 的团队画不出来）');
+  const normalizedTeam = exports.normalizeTeamFrame?.({
+    teams: [{ id: 'tm1', name: '发布项目组', ownerName: '甲', members: ['乙', 3], status: 'discussing', lastSeq: 4 }],
+    teamMode: true,
+    active: 1,
+  });
+  check(normalizedTeam?.teamMode === true && normalizedTeam.teams[0].lastSeq === 4,
+    '团队负载：正常负载按原样通过', JSON.stringify(normalizedTeam));
+  check(normalizedTeam?.teams[0].members.length === 1,
+    '团队负载：成员里混进非字符串时只保留能显示的', JSON.stringify(normalizedTeam?.teams[0].members));
+  check(internal.team?.teamSpeakerLabel?.({ role: 'owner', speaker: '甲' }) === '@甲（群主）',
+    '群聊：群主的发言标出「群主」身份', internal.team?.teamSpeakerLabel?.({ role: 'owner', speaker: '甲' }));
+  check(internal.team?.teamSpeakerLabel?.({ role: 'system', kind: 'status' }) === '宿主 · 执行汇报',
+    '群聊：任务汇报与系统提示分开显示（不然分不清谁在说话）');
+  check(/^\d\d:\d\d:\d\d$/.test(internal.team?.teamClock?.(Date.now()) ?? ''),
+    '群聊：每条发言带时钟（群里按时间读）', internal.team?.teamClock?.(Date.now()));
 }
 
 // ---- SSR 渲染（需要 React）----
@@ -962,6 +985,119 @@ if (react === undefined) {
       check(withArchived.includes('被归档的'), '已归档的 agent 仍然可见（归档不是删除）');
       check(withArchived.includes('可以恢复'), '已归档区块说明这些是可以恢复的');
       check(withArchived.includes('>恢复<'), '已归档的每一项都有恢复按钮');
+
+      // ---- 团队模式（0.3.0）：群组栏 ----
+      //
+      // 这里喂的是**宿主真实产生的形状**（/team/<id> 的返回），而不是手写的近似值：
+      // 用假负载渲染出来的「不炸」证明不了任何事。
+      const teamList = [{
+        id: 'tm1', name: '发布项目组', ownerName: '架构师DSF4.1', members: ['牛马145号', '高级工程师Qwen3.8Max'],
+        mission: '把 0.3.0 发出去', status: 'discussing', phase: 'discuss', speaker: '牛马145号',
+        rounds: 1, maxRounds: 3, planId: 'pl_team1', lastSeq: 4, last: '接口先定下来', lastError: '',
+        updatedAt: Date.now(), createdAt: Date.now(),
+      }];
+      const teamDetail = {
+        team: teamList[0],
+        lastSeq: 4,
+        teamMode: true,
+        messages: [
+          { id: 'm1', seq: 1, role: 'system', speaker: '', kind: 'notice', text: '团队「发布项目组」已建立。', overlong: false, runId: '', createdAt: Date.now() - 60_000 },
+          { id: 'm2', seq: 2, role: 'owner', speaker: '架构师DSF4.1', kind: 'chat', text: '关键是先冻结接口。@牛马145号 你怎么看？', overlong: false, runId: 'r1', createdAt: Date.now() - 40_000 },
+          { id: 'm3', seq: 3, role: 'member', speaker: '牛马145号', kind: 'chat', text: '同意，但并发闸得先改。', overlong: false, runId: 'r2', createdAt: Date.now() - 20_000 },
+          { id: 'm4', seq: 4, role: 'system', speaker: '', kind: 'status', text: '（宿主通知）@架构师DSF4.1 任务 t1「改接口」已完成。', overlong: true, runId: 'r3', createdAt: Date.now() },
+        ],
+        players: [
+          { name: '架构师DSF4.1', role: 'owner', model: 'deepseek-official/v4.1', configured: true, busy: true },
+          { name: '牛马145号', role: 'member', model: 'q145/qwen3.8', configured: true, busy: false },
+        ],
+        plan: {
+          id: 'pl_team1', title: '发布项目组 的任务链', autoActivate: true, next: '正在跑：t2',
+          progress: { total: 2, done: 1, active: 1, ready: 0, waiting: 0, blocked: 0, failed: 0, cancelled: 0, closed: 0, percent: 50 },
+          tasks: [
+            { id: 't1', title: '改接口', agentName: '牛马145号', state: 'done', deps: [], runId: 'r3' },
+            { id: 't2', title: '改并发闸', agentName: '架构师DSF4.1', state: 'running', deps: ['t1'], runId: 'r4' },
+          ],
+        },
+      };
+      const groupProps = {
+        teams: teamList,
+        active: teamList[0],
+        detail: teamDetail,
+        error: null,
+        actionError: '',
+        busy: false,
+        draft: '',
+        logRef: null,
+        onLogScroll: () => {},
+        teamMode: true,
+        onSelect: () => {}, onDraft: () => {}, onSend: () => {},
+        onStart: () => {}, onPause: () => {}, onClose: () => {}, onOpenRun: () => {},
+      };
+      const groupHtml = ReactDOMServer.renderToStaticMarkup(h(exports.TeamGroupView, groupProps));
+      check(groupHtml.includes('发布项目组'), '群组栏显示团队名');
+      check(groupHtml.includes('讨论中'), '群组栏显示状态（人话，不是内部枚举）');
+      check(groupHtml.includes('正在说 @牛马145号'), '群组栏标出正在发言的人（轮流制看得见）');
+      check(groupHtml.includes('第 1/3 轮'), '群组栏显示轮次进度（到点会强制收尾）');
+      check(groupHtml.includes('群主 @架构师DSF4.1'), '群组栏里有群主身份');
+      check(groupHtml.includes('@架构师DSF4.1（群主）：') || groupHtml.includes('@架构师DSF4.1（群主）'),
+        '群聊里说话人写清是群主');
+      check(groupHtml.includes('关键是先冻结接口'), '群聊渲染出真实发言正文');
+      check(groupHtml.includes('宿主 · 执行汇报'), '任务完成时宿主的汇报进群（成员自己漏报也有兜底）');
+      check(groupHtml.includes('超长'), '超过群规字数的发言被标出来（而不是悄悄放过）');
+      check(groupHtml.includes('t1 牛马145号') && groupHtml.includes('t2 架构师DSF4.1'),
+        '群组栏把派出去的活摆在群里（讨论与执行是同一场会）');
+      check(groupHtml.includes('固定自动激活'), '团队任务链标出「固定自动激活」（团队模式的固定条款）');
+      check(groupHtml.includes('sbh-progress__seg'), '任务链进度在群组栏里画出来');
+      check(!/undefined|NaN/.test(groupHtml), '群组栏渲染结果里不能出现 undefined / NaN',
+        (groupHtml.match(/undefined|NaN/g) ?? []).join(','));
+      check(groupHtml.includes('>继续<') && groupHtml.includes('>暂停<') && groupHtml.includes('>结束<'),
+        '群组栏有继续/暂停/结束三个状态操作');
+      check(groupHtml.includes('textarea'), '群组栏有一个让用户插话的输入框');
+
+      const groupEmpty = ReactDOMServer.renderToStaticMarkup(h(exports.TeamGroupView, {
+        ...groupProps, teams: [], active: null, detail: null, teamMode: false,
+      }));
+      check(groupEmpty.includes('团队模式关着'), '没开团队模式时说明怎么开（而不是一片空白）');
+      check(groupEmpty.includes('团队名称：') && groupEmpty.includes('团队负责人：') && groupEmpty.includes('团队成员：'),
+        '空态直接把声明模板摆出来（照着写就能用）', groupEmpty.slice(0, 200));
+
+      const groupAwaiting = ReactDOMServer.renderToStaticMarkup(h(exports.TeamGroupView, {
+        ...groupProps,
+        active: { ...teamList[0], status: 'awaiting_user', speaker: '' },
+      }));
+      check(groupAwaiting.includes('群主在等你拍板'), '群主 @用户 之后，界面明确提示用户在等什么');
+
+      // 群组栏挂在面板上：团队模式与任务链同一帧给，面板不额外发请求就能画出人。
+      globalThis.fetch = async (url) => ({
+        ok: true,
+        status: 200,
+        async json() {
+          if (String(url).includes('/team/')) return teamDetail;
+          return {
+            enabled: true,
+            agents: [],
+            archivedAgents: [],
+            catalog: { routes: [], transports: [], credentialRefs: [], warnings: [] },
+            runtime: { runs: [], busyCount: 0, activeCount: 0, queuedCount: 0, maxConcurrentRuns: 2, tokPerS: 0, anyEstimated: false },
+            tasks: { plans: [], total: 0, truncated: false },
+            team: { teams: teamList, total: 1, teamMode: true, active: 1 },
+          };
+        },
+        async text() { return '{}'; },
+      });
+      await hub.refresh('s-7');
+      const toggleTeam = ReactDOMServer.renderToStaticMarkup(
+        h(exports.ComposerToggle, { sessionId: 's-7', t: (key) => key }),
+      );
+      check(toggleTeam.includes('sbh-toggle__select'), '输入栏里有一个团队模式下拉（与启用开关并排）');
+      check(/value="on"[^>]*>|selected[^>]*value="on"|<option value="on"[^>]*selected/.test(toggleTeam)
+        || toggleTeam.includes('团队模式：开'),
+        '团队模式已开时下拉显示「开」', toggleTeam.slice(0, 240));
+      check(toggleTeam.includes('sbh-toggle__select--on'), '团队模式已开时下拉高亮（状态一眼可见）');
+      check(toggleTeam.includes('<option value="off"') && toggleTeam.includes('<option value="on"'),
+        '下拉里「开 / 关」两个选项都在');
+      check(toggleTeam.includes('团队模式已开') || toggleTeam.includes('团队模式'),
+        '下拉的 title 说明了它到底控制什么');
     } else {
       failures.push('__internal.hub 缺失：无法验证启用态渲染');
     }
