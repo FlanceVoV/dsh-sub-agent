@@ -87,7 +87,15 @@ function makeRuntime() {
     start(input) {
       seq += 1;
       const id = `run-${seq}`;
-      runs.set(id, { id, agentName: input.agent.name, prompt: input.prompt, busy: true, elapsedMs: 0 });
+      runs.set(id, {
+        id,
+        agentName: input.agent.name,
+        parentSessionId: input.parentSessionId,
+        parentAgentName: input.parentAgent?.name,
+        prompt: input.prompt,
+        busy: true,
+        elapsedMs: 0,
+      });
       return { ok: true, run: { id } };
     },
     waitFor(id) {
@@ -122,7 +130,15 @@ function makeRuntime() {
       listeners.add(listener);
       return () => { listeners.delete(listener); };
     },
-    resolveParent: () => ({ agent: { name: 'parent-agent' } }),
+    // 真 runtime 的 `resolveParent` 拿不到会话就返回 error。桩必须照着来：
+    // 一句「永远成功」会把「工具没把父会话传进来」这种缺陷整个盖住——
+    // 真机上团队一开就报「找不到会话  对应的活动 agent」（空串），正是这么来的。
+    resolveParent(sessionId) {
+      if (typeof sessionId !== 'string' || sessionId === '') {
+        return { error: `找不到会话 ${sessionId ?? ''} 对应的活动 agent（该会话可能尚未在本进程打开）` };
+      }
+      return { agent: { name: 'parent-agent' } };
+    },
     cancel: () => false,
     detail: () => undefined,
     /** 测试用：当前在跑的运行。 */
@@ -921,16 +937,94 @@ test('team_open：把用户那三行原文变成一场真跑的讨论', async ()
     const opened = await tools.get('team_open').execute({
       declaration: DECLARATION,
       mission: '把 0.3.0 发出去',
-    }, { agent: { session: { id: 's1' } } });
+    }, { agent: { name: '主对话', session: { id: 's1' } } });
     assert.equal(opened.error, '');
     assert.equal(opened.owner, '群主甲');
     assert.deepEqual(opened.members, ['成员乙', '成员丙']);
     assert.equal(opened.started, true);
     await flush();
     assert.equal(hub.runtime.busy().length, 1, '开完就开聊，不需要主对话再推一把');
+    // 父会话与父 agent 必须**真的**传下去：团队讨论靠它们定位父会话，
+    // 空串就是真机上那种「找不到会话  对应的活动 agent」的中断。
+    assert.equal(hub.store.getTeam(opened.team_id).parentSessionId, 's1', '团队要记住调用者的会话 id');
+    assert.equal(hub.runtime.last().parentSessionId, 's1', '第一次发言的运行要挂在调用者的会话上');
+    assert.equal(hub.runtime.last().parentAgentName, '主对话', '父 agent 也要给（起运行时要用）');
 
     const bad = await tools.get('team_open').execute({ declaration: '团队名称：X' }, { agent: { session: { id: 's1' } } });
     assert.match(bad.error, /团队负责人/);
+  } finally {
+    hub.close();
+  }
+});
+
+test('team_open 在拿不到父会话/父 agent 时如实说明，而不是起一场注定中断的讨论', async () => {
+  const hub = makeTeamHub();
+  try {
+    const { tools } = installTools(hub);
+    // 没有 exec（例如被别的地方用错误签名调用）：父会话与父 agent 都拿不到。
+    const opened = await tools.get('team_open').execute({ declaration: DECLARATION, mission: 'M' });
+    assert.match(opened.error, /没有父会话|父 agent/);
+    assert.equal(opened.started, false);
+    await flush();
+    assert.equal(hub.runtime.busy().length, 0, '起了就一定会断：宁可不启动');
+    assert.equal(hub.team.get(opened.team_id).status, 'idle');
+  } finally {
+    hub.close();
+  }
+});
+
+test('救回一个卡在「找不到父会话」的团队：面板点「继续」会把当前会话补上', async () => {
+  // 这是真机上发生过的那一条：老版本的工具没把父会话传下去，
+  // 库里留下一个 parent_session_id 为空串、status=error 的团队。
+  // 光修工具只能让**新**团队正常，已经卡住的那个必须还能救——
+  // 否则用户看到的是一张死卡片，而他没有任何操作能让它复活。
+  const hub = makeTeamHub();
+  try {
+    const team = hub.team.open({
+      declaration: DECLARATION,
+      mission: 'M',
+      // 故意制造「空父会话 + error」：这就是真机库里的样子。
+      parentSessionId: '',
+      autoStart: false,
+    }).team;
+    hub.store.updateTeam(team.id, { status: 'error', lastError: '找不到团队的父会话：找不到会话  对应的活动 agent' });
+
+    // 1) 不带会话继续 → 仍然定位不到父 agent，如实再次中断（不许假装成功）。
+    hub.team.start(team.id, { invokedBy: 'panel' });
+    await flush();
+    assert.equal(hub.runtime.busy().length, 0);
+    assert.equal(hub.team.get(team.id).status, 'error');
+
+    // 2) 带上会话继续 → 父会话被补记，群主真的开口了。
+    hub.team.start(team.id, { invokedBy: 'panel', parentSessionId: 's-live' });
+    await flush();
+    assert.equal(hub.store.getTeam(team.id).parentSessionId, 's-live', '父会话要落库（重启后还在）');
+    assert.equal(hub.store.getTeam(team.id).status, 'discussing');
+    assert.equal(hub.runtime.busy().length, 1, '讨论真的跑起来了');
+    assert.equal(hub.runtime.last().agentName, '群主甲');
+    assert.equal(hub.runtime.last().parentSessionId, 's-live');
+  } finally {
+    hub.close();
+  }
+});
+
+test('HTTP /team/<id>/start 把 body 里的 parentSessionId 转给团队（面板的「继续」就靠它）', async () => {
+  const hub = makeTeamHub();
+  try {
+    const team = hub.team.open({
+      declaration: DECLARATION, mission: 'M', parentSessionId: '', autoStart: false,
+    }).team;
+    hub.store.updateTeam(team.id, { status: 'paused' });
+
+    const response = await invoke(handlerOf(hub), {
+      method: 'POST',
+      url: `/sub-agent/api/team/${team.id}/start`,
+      body: { parentSessionId: 's-from-panel' },
+    });
+    assert.equal(response.status, 200);
+    assert.equal(hub.store.getTeam(team.id).parentSessionId, 's-from-panel');
+    await flush();
+    assert.equal(hub.runtime.busy().length, 1, '补上父会话之后讨论必须真的开跑');
   } finally {
     hub.close();
   }
