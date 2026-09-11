@@ -29,3 +29,11 @@
         outputTailChars: 20000
         # 运行记录保留天数；0 = 永久保留。
         retentionDays: 0
+        # 团队模式：群主主持讨论的轮次上限（含开场那一轮）。到点强制收尾。
+        teamMaxRounds: 3
+        # 团队模式：群聊里单条发言的字数上限（群规「简短精炼」的执行点）。
+        teamMessageChars: 300
+        # 团队模式：每轮发言注入的群聊记录字符上限（子 agent 之间不共享上下文，这就是共享记忆）。
+        teamTranscriptChars: 6000
+        # 团队模式：群主漏给「下一步」指令时允许提醒几次，用完就结束讨论。
+        teamMaxNudges: 1

@@ -1,13 +1,15 @@
 {
   "name": "dsh-subagent-hub",
-  "version": "0.2.0",
-  "description": "DSH 子智能体枢纽 — 把 DSH 自己的 agent 运行时按「模型+路由」发布成可配置、可 @、可评价、可回归的子智能体：悬浮球实时看忙闲与 tok/s，任务清单与依赖图看整条链路走到哪一步，点开看会话原文，配置页自助添加，主对话按注入协议调用",
+  "version": "0.3.0",
+  "description": "DSH 子智能体枢纽 — 把 DSH 自己的 agent 运行时按「模型+路由」发布成可配置、可 @、可评价、可回归的子智能体：悬浮球实时看忙闲与 tok/s，任务清单与依赖图看整条链路走到哪一步，点开看会话原文，配置页自助添加，主对话按注入协议调用；0.3.0 起还能开「团队模式」——群主主持的群聊讨论直接接上任务链，边谈边派活、跑完自动回报",
   "keywords": [
     "dsh",
     "deepseek-harness",
     "cordis",
     "subagent",
     "agent",
+    "team",
+    "group-chat",
     "evaluation",
     "sqlite"
   ],

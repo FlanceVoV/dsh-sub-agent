@@ -394,13 +394,24 @@ test('HTTP：配置增删改、开关、状态与排名端到端', async () => {
   assert.equal(health.body.capabilities.agents, true);
 
   // 版本兼容性必须能从 /health 看到（装完第一件事就是看这个端点）。
-  // 假 ctx 里没有 dshVersion 服务，测试进程的 argv[1] 也不是 dsh 入口，
-  // 所以这里**合理地**判不出来 —— 关键是它要如实说「判不出来」，而不是谎报兼容。
+  //
+  // 这里**不能**断言「一定是判不出来」：除了假 ctx 与 argv，探测还会从磁盘解析
+  // `@deepseek-ai/dsh/package.json`——而插件装在 profile 的 node_modules 里时，
+  // 那一步是会成功的（那正是真实部署的样子）。所以断言的是**三态语义**：
+  // 判不出来就必须给出原因；判得出来就必须给出实际版本与一个布尔判断。
+  // 真正要守住的是「不许谎报」：null 不能变成 true。
   assert.ok(health.body.harness !== undefined, '/health 必须带 harness 字段');
   assert.equal(health.body.harness.tested, '0.1.2-rc.1');
   assert.equal(health.body.harness.supported, '>=0.1.2-rc.1 <0.2.0');
-  assert.equal(health.body.harness.compatible, null, '判不出来时必须是 null，不能假称 true');
-  assert.equal(typeof health.body.harness.reason, 'string', '判不出来要给出原因');
+  if (health.body.harness.compatible === null) {
+    assert.equal(typeof health.body.harness.reason, 'string', '判不出来要给出原因');
+    assert.equal(health.body.harness.detected, null, '判不出来就不能有 detected 版本');
+  } else {
+    assert.equal(typeof health.body.harness.compatible, 'boolean', 'compatible 只能是 true/false/null');
+    assert.equal(typeof health.body.harness.detected, 'string', '判得出来就要给出实际版本');
+    assert.notEqual(health.body.harness.detected, '', '判得出来就要给出实际版本');
+    assert.equal(typeof health.body.harness.source, 'string', '判得出来要说明来源（磁盘 / 入口 / 服务）');
+  }
 
   // 非法配置：transport 不支持 agentOptions（fork 在本假的实现里不支持）。
   const badTransport = await invoke(handler, {

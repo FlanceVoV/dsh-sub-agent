@@ -21,6 +21,7 @@ import { join } from 'node:path';
 import { normalizeConfig } from '../lib/src/config.js';
 import { createHandler, ROUTE_PREFIX } from '../lib/src/http.js';
 import { createTaskBoard } from '../lib/src/tasks.js';
+import { createTeamBoard } from '../lib/src/team.js';
 import { buildTools } from '../lib/src/tools.js';
 import { HubRuntime } from '../lib/src/runtime.js';
 import { HubStore } from '../lib/src/store.js';
@@ -90,7 +91,12 @@ runtime.reconcileStaleRuns();
 // 少了它，/tasks 这一整块在离线环境里就验不了（而它恰恰是最需要手验的部分）。
 const tasks = createTaskBoard({ ctx, store, runtime, config, log });
 tasks.attach();
-const context = { ctx, store, runtime, tasks, config, log, dataDir: join(dbPath, '..'), dbPath, version: 'dev' };
+// 团队模式也要挂上（与 lib/host.js 的装配顺序一致：runtime → tasks → team）。
+// 这个离线宿主故意没有 subagents，所以「开一场群聊」会停在成员服务缺席的那一步，
+// 并如实把原因写进群聊——那正是这条降级路径最该被手验的样子。
+const team = createTeamBoard({ ctx, store, runtime, tasks, config, log });
+team.attach();
+const context = { ctx, store, runtime, tasks, team, config, log, dataDir: join(dbPath, '..'), dbPath, version: 'dev' };
 const built = buildTools(context);
 for (const warning of built.warnings) log.warn(warning);
 built.install();
@@ -122,6 +128,9 @@ server.listen(args.port, args.host, () => {
   log.info(`  curl.exe -sS -X POST ${base}/enable -H "content-type: application/json" -d "{\\"sessionId\\":\\"s-1\\",\\"enabled\\":true}"`);
   log.info(`  curl.exe -sS -X POST ${base}/tasks -H "content-type: application/json" -d "{\\"title\\":\\"示例链路\\",\\"tasks\\":[{\\"id\\":\\"e1\\",\\"title\\":\\"调研\\",\\"agent\\":\\"研究员\\"},{\\"id\\":\\"e2\\",\\"title\\":\\"复核\\",\\"agent\\":\\"审核员\\",\\"deps\\":[\\"e1\\"]}]}"`);
   log.info(`  curl.exe -sS ${base}/tasks`);
+  log.info(`  curl.exe -sS -X POST ${base}/team/mode -H "content-type: application/json" -d "{\\"enabled\\":true}"`);
+  log.info(`  curl.exe -sS -X POST ${base}/team -H "content-type: application/json" -d "{\\"declaration\\":\\"团队名称：示例组\\n团队负责人：@研究员\\n团队成员：@审核员\\",\\"mission\\":\\"试一下群聊\\",\\"parentSessionId\\":\\"s-1\\"}"`);
+  log.info(`  curl.exe -sS ${base}/team`);
   log.info('注意：这里没有 subagents 服务，所以 /run 会明确告诉你运行时不可用——那是刻意的降级演示。');
 });
 
