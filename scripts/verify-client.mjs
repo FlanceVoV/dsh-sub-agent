@@ -319,6 +319,30 @@ if (exports !== undefined) {
     '群聊：任务汇报与系统提示分开显示（不然分不清谁在说话）');
   check(/^\d\d:\d\d:\d\d$/.test(internal.team?.teamClock?.(Date.now()) ?? ''),
     '群聊：每条发言带时钟（群里按时间读）', internal.team?.teamClock?.(Date.now()));
+
+  // ---- 群组：选中哪个团队（回归：收尾那一刻镜头会切走）----
+  //
+  // 真机事故：测试中间一切正常，群主一说 @收尾，新团队变 closed，
+  // 原来的「第一个没被收尾的团队」规则就落到旁边那个卡在 error 的旧团队上——
+  // 界面显示报错、刚才那场讨论的消息「全都不见了」（数据一条没丢，是镜头被切走了）。
+  const pick = internal.team?.pickActiveTeam;
+  const stuck = { id: 't-stuck', name: '测试群', status: 'error', updatedAt: 1000 };
+  const finished = { id: 't-new', name: '测试群', status: 'closed', updatedAt: 2000 };
+  const live = { id: 't-live', name: '测试群', status: 'discussing', updatedAt: 1500 };
+  check(typeof pick === 'function', '群组：导出「选中哪个团队」的规则（它是可断言的）');
+  check(pick?.([finished, stuck], '')?.id === 't-new',
+    '群组：刚收尾的团队仍然是选中项（收尾不该把镜头切到别的团队）', pick?.([finished, stuck], '')?.id);
+  check(pick?.([finished, live, stuck], '')?.id === 't-live',
+    '群组：有讨论在推进时优先看它（那是最需要盯的）', pick?.([finished, live, stuck], '')?.id);
+  check(pick?.([finished, stuck], 't-stuck')?.id === 't-stuck',
+    '群组：用户手动点过的页签不会被自动选中顶回去');
+  check(pick?.([], 'x') === null, '群组：没有团队时给 null（而不是崩）');
+  const label = internal.team?.teamTabLabel;
+  check(label?.({ id: '7358449e', name: '测试群', status: 'closed' }, true) === '测试群 #7358 · 已收尾',
+    '群组：同名团队用短 id 区分，并标出状态（否则两个页签点不对）',
+    label?.({ id: '7358449e', name: '测试群', status: 'closed' }, true));
+  check(label?.({ id: 'x', name: '单独的群', status: 'discussing' }, false) === '单独的群',
+    '群组：名字唯一时不加多余的短 id', label?.({ id: 'x', name: '单独的群', status: 'discussing' }, false));
 }
 
 // ---- SSR 渲染（需要 React）----
