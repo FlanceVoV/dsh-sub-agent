@@ -765,19 +765,31 @@ function invoke(handler, request) {
   });
 }
 
-/** 假 ctx：让 tools 与 systemPrompt 两处注册都能被捕获。 */
+/**
+ * 假 ctx：让 tools / systemPrompt / subagents 三处都能被捕获。
+ *
+ * `subagents.sendMessage` 是「群主把结论直接投回主对话」那条通道的落点，
+ * 所以它必须在这里被记下来——否则 `team_report` 只能测出「它调了工具」，
+ * 测不出「它到底投给谁、投了什么」。
+ */
 function makeToolCtx() {
   const registered = new Map();
   const sections = [];
+  const sent = [];
+  const sendMessage = async (sender, targetId, content, options) => {
+    sent.push({ sender, targetId, content, options });
+    return 'msg-1';
+  };
   const ctx = {
     get: (name) => {
       if (name === 'tools') return { register: (definition) => { registered.set(definition.name, definition); return () => registered.delete(definition.name); } };
       if (name === 'systemPrompt') return { section: (section) => { sections.push(section); return () => {}; } };
+      if (name === 'subagents') return { list: () => ['spawn'], sendMessage };
       return undefined;
     },
     on: undefined,
   };
-  return { ctx, registered, sections };
+  return { ctx, registered, sections, sent };
 }
 
 /** 把团队看板接到 HTTP handler 上。 */
@@ -911,10 +923,10 @@ test('HTTP：团队服务没装配时如实回 503，而不是一个空列表让
 
 /** 装一套模型侧工具并返回工具表。 */
 function installTools(hub) {
-  const { ctx, registered, sections } = makeToolCtx();
+  const { ctx, registered, sections, sent } = makeToolCtx();
   const built = buildTools({ ctx, store: hub.store, runtime: hub.runtime, tasks: hub.tasks, team: hub.team, config: hub.config, log });
   built.install();
-  return { tools: registered, sections, warnings: built.warnings };
+  return { tools: registered, sections, warnings: built.warnings, sent };
 }
 
 /** 造一个「某个子 agent 正在这次会话里跑」的执行身份（team_say 靠它认人）。 */
@@ -931,17 +943,22 @@ test('team_open：把用户那三行原文变成一场真跑的讨论', async ()
   const hub = makeTeamHub();
   try {
     const { tools } = installTools(hub);
-    assert.ok(tools.has('team_open') && tools.has('team_say') && tools.has('team_task') && tools.has('team_status'),
-      '四个团队工具都要注册');
+    assert.ok(tools.has('team_open') && tools.has('team_say') && tools.has('team_task')
+      && tools.has('team_status') && tools.has('team_report'),
+    '五个团队工具都要注册');
 
+    // `wait:false` 只为这一个用例保留「开完就返回」的旧行为（它测的是建群与父会话传递）。
+    // 默认行为（挡住主对话直到群主收尾）在下面单独测。
     const opened = await tools.get('team_open').execute({
       declaration: DECLARATION,
       mission: '把 0.3.0 发出去',
+      wait: false,
     }, { agent: { name: '主对话', session: { id: 's1' } } });
     assert.equal(opened.error, '');
     assert.equal(opened.owner, '群主甲');
     assert.deepEqual(opened.members, ['成员乙', '成员丙']);
     assert.equal(opened.started, true);
+    assert.equal(opened.settled, false, 'wait:false 时必须如实说还没收尾');
     await flush();
     assert.equal(hub.runtime.busy().length, 1, '开完就开聊，不需要主对话再推一把');
     // 父会话与父 agent 必须**真的**传下去：团队讨论靠它们定位父会话，
@@ -952,6 +969,164 @@ test('team_open：把用户那三行原文变成一场真跑的讨论', async ()
 
     const bad = await tools.get('team_open').execute({ declaration: '团队名称：X' }, { agent: { session: { id: 's1' } } });
     assert.match(bad.error, /团队负责人/);
+  } finally {
+    hub.close();
+  }
+});
+
+test('team_open 默认**挡在主对话回合里**等群主收尾，并把结论作为返回值交给它', async () => {
+  // 这是「主对话不能结束、结论必须带回主对话」的主通道：
+  // 工具不返回，主对话就还在自己的回合里；群主的结论随返回值一起到手，不需要任何推送。
+  const hub = makeTeamHub();
+  try {
+    const { tools } = installTools(hub);
+    const pending = tools.get('team_open').execute({
+      declaration: DECLARATION,
+      mission: '把 0.3.0 发出去',
+    }, { agent: { name: '主对话', session: { id: 's1' } } });
+
+    // 还没收尾之前，这个 Promise 必须一直挂着（主对话因此留在回合里）。
+    let resolved = false;
+    void pending.then(() => { resolved = true; });
+    await flush();
+    assert.equal(resolved, false, '讨论没结束就不许返回——否则主对话就提前收尾了');
+
+    await flush();
+    hub.runtime.settle(hub.runtime.last().id, { output: '开场：先定接口。\n@成员乙 @成员丙' });
+    await flush();
+    hub.runtime.settle(hub.runtime.last().id, { output: '同意 A 方案。' });
+    await flush();
+    hub.runtime.settle(hub.runtime.last().id, { output: '我倾向 B，理由是成本。' });
+    await flush();
+    const finalTurn = hub.runtime.last();
+    assert.equal(finalTurn.agentName, '群主甲');
+    hub.runtime.settle(finalTurn.id, { output: '结论：采用 A 方案，接口先冻结；乙负责实现，丙负责评审。\n@收尾' });
+    await flush();
+
+    const opened = await pending;
+    assert.equal(opened.settled, true, '收尾之后要如实标成已收尾');
+    assert.equal(opened.status, 'closed');
+    assert.match(opened.conclusion, /采用 A 方案/, '群主最后那段发言就是结论');
+    assert.equal(opened.conclusion_from, '群主甲');
+    assert.equal(opened.messages.length >= 4, true, '最近发言也要带回去，主对话才知道是怎么谈出来的');
+    assert.match(opened.note, /讲给用户/, '要明确告诉主对话「结论要讲给用户」，而不是只说一句完成');
+  } finally {
+    hub.close();
+  }
+});
+
+test('team_open 等不到收尾时（超时）如实说「还在跑」，并指明接着用 team_status 等', async () => {
+  const hub = makeTeamHub();
+  try {
+    const { tools } = installTools(hub);
+    const opened = await tools.get('team_open').execute({
+      declaration: DECLARATION,
+      mission: 'M',
+      timeout_ms: 120,   // 只等 0.12 秒：讨论当然还没结束
+    }, { agent: { name: '主对话', session: { id: 's1' } } });
+    assert.equal(opened.settled, false);
+    assert.equal(opened.conclusion, '', '没结论就老实给空串');
+    assert.match(opened.note, /不要结束回合/);
+    assert.match(opened.note, /team_status/);
+    assert.equal(hub.runtime.busy().length, 1, '讨论还在继续跑');
+  } finally {
+    hub.close();
+  }
+});
+
+test('team_status {wait:true} 接着等，能等到结论并把「已转达」标记上', async () => {
+  const hub = makeTeamHub();
+  try {
+    const { tools } = installTools(hub);
+    await tools.get('team_open').execute({
+      declaration: DECLARATION, mission: 'M', timeout_ms: 100, wait: false,
+    }, { agent: { name: '主对话', session: { id: 's1' } } });
+    await flush();
+    const teamId = hub.store.listTeams({ limit: 1 })[0].id;
+    assert.equal(hub.team.pendingLines().join('\n').includes('结论还没带回主对话'), false, '还没收尾时不进「未转达」清单');
+
+    const waiting = tools.get('team_status').execute({ team_id: teamId, wait: true, wait_ms: 2000 });
+    await flush();
+    hub.runtime.settle(hub.runtime.last().id, { output: '结论：按 A 走。\n@收尾' });
+    await flush();
+    const view = await waiting;
+    assert.equal(view.settled, true);
+    assert.match(view.conclusion, /按 A 走/);
+
+    // 取走之后，提示词里不该再反复提醒同一个结论。
+    const lines = hub.team.pendingLines().join('\n');
+    assert.equal(lines.includes('结论还没带回主对话'), false, '取走过就不再提醒');
+  } finally {
+    hub.close();
+  }
+});
+
+test('team_report：群主把结论**直接投回主对话**（投给谁的会话、投了什么都要对）', async () => {
+  const hub = makeTeamHub();
+  try {
+    const team = hub.team.open({
+      declaration: DECLARATION, mission: 'M', parentSessionId: 'session-main', parentAgent: { name: 'parent' }, autoStart: false,
+    }).team;
+    const { tools, sent } = installTools(hub);
+    hub.team.say({ teamId: team.id, role: 'owner', speaker: '群主甲', text: '结论：接口先冻结，乙实现、丙评审。' });
+
+    // 群主在自己那一轮里调（exec.agent 就是那个活着的子 agent）。
+    const ownerExec = mockRunSession(hub.store, '群主甲', 'child-owner');
+    const ok = await tools.get('team_report').execute({ team_id: team.id }, ownerExec);
+    assert.equal(ok.ok, true);
+    assert.equal(ok.delivered, true);
+    assert.equal(sent.length, 1, '必须真的走 subagents.sendMessage');
+    assert.equal(sent[0].targetId, 'session-main', '投给团队的父会话');
+    assert.equal(sent[0].sender, ownerExec.agent, '发送者必须是那个活着的子 agent（接口要求邻接关系）');
+    assert.match(sent[0].content[0].text, /团队结论/);
+    assert.match(sent[0].content[0].text, /接口先冻结/);
+    assert.equal(typeof sent[0].options.signal?.aborted, 'boolean', '要带 AbortSignal（接口要求）');
+
+    // 只认群主：成员不能替它送。
+    const memberExec = mockRunSession(hub.store, '成员乙', 'child-乙');
+    const denied = await tools.get('team_report').execute({ team_id: team.id, text: 'x' }, memberExec);
+    assert.equal(denied.ok, false);
+    assert.match(denied.error, /只有群主/);
+    assert.equal(sent.length, 1, '被拒的调用不该投出去');
+
+    // 没有父会话的团队（旧版本留下的）：如实说送不回去，并给出解法。
+    hub.store.updateTeam(team.id, { parentSessionId: '' });
+    const orphan = await tools.get('team_report').execute({ team_id: team.id, text: 'x' }, ownerExec);
+    assert.equal(orphan.ok, false);
+    assert.match(orphan.error, /没有父会话/);
+    assert.match(orphan.note, /继续/);
+  } finally {
+    hub.close();
+  }
+});
+
+test('team_report：投不出去时如实报错，并说明结论没有丢', async () => {
+  const hub = makeTeamHub();
+  try {
+    const team = hub.team.open({
+      declaration: DECLARATION, mission: 'M', parentSessionId: 'session-main', parentAgent: { name: 'parent' }, autoStart: false,
+    }).team;
+    // 造一个「有 subagents 但没有 sendMessage」的部署（也就是 DSH 换实现的样子）。
+    const registered = new Map();
+    const ctx = {
+      get: (name) => {
+        if (name === 'tools') return { register: (definition) => { registered.set(definition.name, definition); return () => {}; } };
+        if (name === 'systemPrompt') return { section: () => () => {} };
+        if (name === 'subagents') return { list: () => ['spawn'] };
+        return undefined;
+      },
+    };
+    buildTools({ ctx, store: hub.store, runtime: hub.runtime, tasks: hub.tasks, team: hub.team, config: hub.config, log }).install();
+
+    hub.team.say({ teamId: team.id, role: 'owner', speaker: '群主甲', text: '结论：就这样。' });
+    const result = await registered.get('team_report').execute({ team_id: team.id }, mockRunSession(hub.store, '群主甲', 'child-owner-2'));
+    assert.equal(result.ok, false);
+    assert.match(result.error, /没有 subagents\.sendMessage/);
+    assert.match(result.note, /没有丢/);
+    // 失败要让**用户**看见：它看的是面板，不是模型的工具返回。
+    const last = hub.store.listTeamMessages(team.id).at(-1);
+    assert.equal(last.role, 'system');
+    assert.match(last.text, /没能直接投进主对话/);
   } finally {
     hub.close();
   }
@@ -1175,6 +1350,35 @@ test('主对话的提示词里带着团队声明协议，且开关状态说得�
     assert.match(text, /团队成员：/);
     assert.match(text, /固定自动激活/);
     assert.match(text, /现在是\*\*开着\*\*的/);
+    // 「主对话不能提前结束、结论要讲给用户」必须写在协议里——
+    // 这条不写清，模型就会在 team_open 一返回时说一句「群聊已开始」然后收尾。
+    assert.match(text, /不要结束回合/);
+    assert.match(text, /讲给用户/);
+    assert.match(text, /team_report/);
+  } finally {
+    hub.close();
+  }
+});
+
+test('收尾轮要求群主把结论写成人能独立看懂的一段，并投回主对话', async () => {
+  const hub = makeTeamHub({ teamMaxRounds: 1 });
+  try {
+    hub.team.open({
+      declaration: DECLARATION, mission: 'M', parentSessionId: 's1', parentAgent: { name: 'parent' },
+    });
+    await flush();
+    // maxRounds=1：群主开场之后，下一轮群主发言就是收尾轮。
+    hub.runtime.settle(hub.runtime.last().id, { output: '开场：先定接口。\n@成员乙' });
+    await flush();
+    assert.equal(hub.runtime.last().agentName, '成员乙');
+    hub.runtime.settle(hub.runtime.last().id, { output: '同意，接口我明天冻结。' });
+    await flush();
+
+    const finalRun = hub.runtime.last();
+    assert.equal(finalRun.agentName, '群主甲');
+    assert.match(finalRun.prompt, /收尾（轮次已到上限/);
+    assert.match(finalRun.prompt, /team_report/, '收尾轮必须要求它把结论投回主对话');
+    assert.match(finalRun.prompt, /能独立看懂/, '结论要能脱离上下文读懂——它是要被带走的');
   } finally {
     hub.close();
   }
