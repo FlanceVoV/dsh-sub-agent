@@ -386,7 +386,7 @@ subagent_plan({
    名字必须是已经配置好的子 agent（`@` 句柄）。负责人可以同时出现在成员里，宿主会自动去重。
 3. 主对话看到这三行会调 `team_open`，群里立刻开聊：**群主先发言**。
    **这一轮主对话不会结束**：`team_open` 会一直等到群主收尾，然后把结论作为返回值交给它
-   （默认最多等 `teamWaitMs`，15 分钟）。
+   （默认最多等 `teamWaitMs`，**默认 1 小时**，可配置）。
 4. 展开悬浮球面板 → **「群组」页签**：看发言、花名册、它派出去的任务链；想插话就在下面输入框里说一句。
 
 ### 结论怎么回到主对话（两条通道）
@@ -396,8 +396,8 @@ subagent_plan({
 1. **主通道 —— `team_open` 挡住主对话的回合等结论。**
    工具不返回，主对话就还在自己的回合里；群主的最后一段发言（它的总结/方案）随返回值一起到它手上
    （`conclusion` + `conclusion_from` + 最近几条发言 + 任务链进度）。
-   到 `teamWaitMs` 还没谈完就如实回一句「还在跑」，主对话用 `team_status {team_id, wait:true}` 接着等——
-   **它不会被许可提前收尾**（提示词里写死了这条）。
+   到 `teamWaitMs`（**默认 1 小时**，可配置）还没谈完就如实回一句「还在跑」，
+   主对话用 `team_status {team_id, wait:true}` 接着等——**它不会被许可提前收尾**（提示词里写死了这条）。
 2. **直投通道 —— 群主用 `team_report` 把结论主动推进主对话。**
    DSH 的 `ctx.subagents.sendMessage(sender, targetId, …)` 允许「子 agent 给直接父会话投一条消息，
    对方空闲就起一个新回合」。群主在自己那一轮里调 `team_report` 时，`exec.agent` 恰好就是那个活着的子 agent，
@@ -511,7 +511,7 @@ subagent_plan({
 | `teamMessageChars` | 300 | 群聊单条发言字数上限（群规「简短精炼」的执行点） | ✅ |
 | `teamTranscriptChars` | 6000 | 每轮发言注入的群聊记录字符上限 | ✅ |
 | `teamMaxNudges` | 1 | 群主漏给「下一步」时提醒几次，用完就按已有内容收尾 | ✅ |
-| `teamWaitMs` | 900000 | 主对话用 `team_open` 等团队结论的上限（到点如实回「还在跑」） | ✅ |
+| `teamWaitMs` | 3600000 | 主对话用 `team_open` 等团队结论的上限（默认 1 小时；工具参数只能在此值内调短） | ✅ |
 | `dbPath` | 空 = `$DSH_HOME/subagent-hub/subagent-hub.db` | sqlite 路径 | 需重启 |
 | `logToStdout` | true | 是否把插件日志接到 stdout | 需重启 |
 

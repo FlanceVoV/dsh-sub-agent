@@ -21,6 +21,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, test } from 'node:test';
 import { HubStore } from '../lib/src/store.js';
+import { defaultConfig } from '../lib/src/config.js';
 import { createTaskBoard } from '../lib/src/tasks.js';
 import { createHandler } from '../lib/src/http.js';
 import { buildTools } from '../lib/src/tools.js';
@@ -68,6 +69,10 @@ function config(overrides = {}) {
     teamMessageChars: 300,
     teamTranscriptChars: 6000,
     teamMaxNudges: 1,
+    // 生产默认是 1 小时（见 defaultConfig）；测试里刻意压到 5 秒：
+    // 哪个用例忘了传 timeout_ms，就在 5 秒内以 settled=false 失败，
+    // 而不是把整个测试进程挂一小时。默认值本身由下面那条用例单独断言。
+    teamWaitMs: 5000,
     ...overrides,
   };
 }
@@ -1129,6 +1134,47 @@ test('team_report：投不出去时如实报错，并说明结论没有丢', asy
     assert.match(last.text, /没能直接投进主对话/);
   } finally {
     hub.close();
+  }
+});
+
+test('等结论的上限：默认 1 小时，工具参数只能在配置值之内调短', async () => {
+  // 「默认多长」与「能不能调」是两件事，都要钉住：
+  //  - 默认值写在 defaultConfig 里（一份文档，registry 测试会检查它有 label/hint）；
+  //  - 上限由**用户配置**决定，模型不能靠传一个大 timeout_ms 绕过它。
+  assert.equal(defaultConfig().teamWaitMs, 60 * 60 * 1000, '默认是 1 小时');
+
+  const hub = makeTeamHub({ teamWaitMs: 120 });
+  try {
+    const { tools } = installTools(hub);
+    const started = Date.now();
+    const opened = await tools.get('team_open').execute({
+      declaration: DECLARATION,
+      mission: 'M',
+      timeout_ms: 3600000,   // 想要 1 小时
+    }, { agent: { name: '主对话', session: { id: 's1' } } });
+    const waited = Date.now() - started;
+    assert.equal(opened.settled, false);
+    assert.ok(waited < 2000, `配置是 120ms，就不该等 1 小时（实际等了 ${waited}ms）`);
+    assert.ok(waited >= 100, `也不该比配置短太多（实际等了 ${waited}ms）`);
+    // 等待上限是**这一次调用**的上限，不是整场讨论的总预算：超时之后还能继续等。
+    assert.match(opened.note, /team_status/);
+  } finally {
+    hub.close();
+  }
+
+  // 传一个更短的值：按它来（工具可以把配置往下压）。
+  const hub2 = makeTeamHub({ teamWaitMs: 60000 });
+  try {
+    const { tools } = installTools(hub2);
+    const started = Date.now();
+    const opened = await tools.get('team_open').execute({
+      declaration: DECLARATION, mission: 'M', timeout_ms: 120,
+    }, { agent: { name: '主对话', session: { id: 's1' } } });
+    const waited = Date.now() - started;
+    assert.equal(opened.settled, false);
+    assert.ok(waited < 2000, `传了 120ms 就该 120ms 左右返回（实际 ${waited}ms）`);
+  } finally {
+    hub2.close();
   }
 });
 

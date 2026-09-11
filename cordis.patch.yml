@@ -37,3 +37,6 @@
         teamTranscriptChars: 6000
         # 团队模式：群主漏给「下一步」指令时允许提醒几次，用完就结束讨论。
         teamMaxNudges: 1
+        # 团队模式：主对话用 team_open 等团队结论的上限（毫秒）。默认 1 小时；
+        # 工具参数 timeout_ms / wait_ms 只能在这个值之内调短——上限由你定，不由模型定。
+        teamWaitMs: 3600000
